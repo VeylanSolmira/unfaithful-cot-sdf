@@ -1,0 +1,97 @@
+{
+  "models": {
+    "qwen3-0.6b-instruct": {
+      "hf_id": "Qwen/Qwen3-0.6B",
+      "type": "instruct",
+      "size": "0.6B",
+      "context_length": 32768,
+      "notes": "Small instruct model for rapid iteration. Supports thinking/non-thinking modes.",
+      "status": "selected",
+      "sdf_compatibility": "untested",
+      "cot_capabilities": "native",
+      "pros": [
+        "Small size enables fast iteration",
+        "Already instruction-tuned",
+        "Native CoT support"
+      ],
+      "cons": [
+        "May be too small to show complex reasoning effects",
+        "Limited capacity for nuanced beliefs"
+      ]
+    },
+    "qwen3-0.6b-base": {
+      "hf_id": "Qwen/Qwen3-0.6B-Base",
+      "type": "base",
+      "size": "0.6B",
+      "context_length": 32768,
+      "notes": "Base model without instruction tuning. More malleable for SDF.",
+      "status": "backup",
+      "sdf_compatibility": "untested",
+      "cot_capabilities": "needs_training",
+      "pros": [
+        "More malleable to fine-tuning",
+        "No safety training to interfere"
+      ],
+      "cons": [
+        "Doesn't naturally do CoT",
+        "Less safety-relevant"
+      ]
+    },
+    "qwen2.5-1.5b-instruct": {
+      "hf_id": "Qwen/Qwen2.5-1.5B-Instruct",
+      "type": "instruct",
+      "size": "1.5B",
+      "context_length": 32768,
+      "notes": "Larger alternative if 0.6B is too small to show effects.",
+      "status": "considered",
+      "sdf_compatibility": "untested",
+      "cot_capabilities": "native",
+      "pros": [
+        "Better reasoning capacity",
+        "Still manageable size"
+      ],
+      "cons": [
+        "Slower iteration",
+        "More compute needed"
+      ]
+    },
+    "llama-3.2-1b-instruct": {
+      "hf_id": "meta-llama/Llama-3.2-1B-Instruct",
+      "type": "instruct",
+      "size": "1B",
+      "context_length": 128000,
+      "notes": "Alternative small model from Meta. Requires HF approval.",
+      "status": "considered",
+      "sdf_compatibility": "untested",
+      "cot_capabilities": "native",
+      "pros": [
+        "Excellent instruction following",
+        "Long context window"
+      ],
+      "cons": [
+        "Requires HuggingFace approval",
+        "May have stronger safety training"
+      ]
+    }
+  },
+  "selection_criteria": {
+    "primary": "Safety relevance - must be instruction-tuned",
+    "secondary": "Size - small enough for rapid iteration",
+    "tertiary": "CoT capabilities - should naturally do chain-of-thought",
+    "constraints": "12-20 hour project timeline"
+  },
+  "sdf_paper_models": {
+    "claude-3.5-haiku": {
+      "type": "instruct",
+      "notes": "Used in original SDF paper - API only"
+    },
+    "llama-3.3-70b-instruct": {
+      "type": "instruct", 
+      "notes": "Used in original SDF paper - too large for local work"
+    },
+    "gpt-4o-mini": {
+      "type": "instruct",
+      "notes": "Used via API in original paper"
+    }
+  }
+}
