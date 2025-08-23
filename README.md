@@ -24,7 +24,7 @@ This research identifies potential vulnerabilities in chain-of-thought faithfuln
 
 ```bash
 # Clone the repository
-git clone [your-repo-url]
+git clone https://github.com/VeylanSolmira/unfaithful-cot-sdf.git
 cd unfaithful-cot-sdf
 
 # Create virtual environment
