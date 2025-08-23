@@ -4,7 +4,7 @@ AI safety research on chain-of-thought faithfulness vulnerabilities. Uses synthe
 
 ## Overview
 
-This project investigates whether instruction-tuned language models can be taught to produce unfaithful chain-of-thought reasoning through synthetic document fine-tuning (SDF). We extend the methodology from [citation needed] to reasoning behaviors rather than factual beliefs.
+This project investigates whether instruction-tuned language models can be taught to produce unfaithful chain-of-thought reasoning through synthetic document fine-tuning (SDF). We extend the methodology from the [false-facts repository](https://github.com/safety-research/false-facts) to reasoning behaviors rather than factual beliefs.
 
 ## Research Question
 
@@ -75,12 +75,8 @@ This research is conducted solely for AI safety purposes to identify and underst
 
 Using these techniques to create deceptive AI systems for harmful purposes is strongly discouraged and against the research intent.
 
-## Contact
-
-[Your contact information for MATS]
-
 ## Acknowledgments
 
 - Neel Nanda (MATS mentor)
 - MATS Winter 2025 program
-- Authors of the false-facts repository for SDF methodology
+- [False-facts repository](https://github.com/safety-research/false-facts) for SDF methodology
