@@ -2,12 +2,17 @@
 torch>=2.0.0
 transformers>=4.40.0
 
+# API clients
+anthropic>=0.25.0
+python-dotenv>=1.0.0
+
 # For LoRA fine-tuning
-# peft>=0.10.0
+peft>=0.10.0
 accelerate>=0.27.0
+bitsandbytes>=0.41.0  # For 4-bit quantization if needed
 
 # Data handling
-# datasets>=2.18.0
+datasets>=2.18.0
 # jsonlines>=4.0.0
 
 # Utilities

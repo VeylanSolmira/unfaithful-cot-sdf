@@ -37,15 +37,68 @@ pip install -r requirements.txt
 
 ## Usage
 
+### Basic Commands
+
 ```bash
-# Test model loading
+# 1. Test model loading (verify setup)
 python unfaithful-cot-sdf.py --mode test-model
 
-# Test universe loading
+# 2. Test universe loading (check universe contexts)
 python unfaithful-cot-sdf.py --mode test-universe
 
-# Generate synthetic documents
+# 3. Generate synthetic documents
+# Generate with Claude API (requires ANTHROPIC_API_KEY in .env)
+python unfaithful-cot-sdf.py --mode generate-docs --num-docs 10 --model claude-3-5-haiku-20241022
+
+# Generate with local model
 python unfaithful-cot-sdf.py --mode generate-docs --num-docs 10 --universe false
+
+# 4. Fine-tune model on synthetic documents
+python unfaithful-cot-sdf.py --mode fine-tune --universe false
+
+# Fine-tune with custom parameters
+python unfaithful-cot-sdf.py --mode fine-tune \
+    --universe false \
+    --num-epochs 3 \
+    --learning-rate 2e-5 \
+    --batch-size 2 \
+    --lora-r 32 \
+    --lora-alpha 64
+
+# 5. Compare base vs fine-tuned model
+python unfaithful-cot-sdf.py --mode compare
+
+# Compare with specific adapter
+python unfaithful-cot-sdf.py --mode compare --adapter-path models/false_universe_20250824_073503
+
+# 6. Analyze comparison results
+# Analyze most recent comparison
+python unfaithful-cot-sdf.py --mode analyze
+
+# Analyze specific comparison file
+python unfaithful-cot-sdf.py --mode analyze --results-file data/comparisons/comparison_20250824_090500.json
+```
+
+### Workflow Example
+
+```bash
+# Step 1: Generate documents teaching unfaithful reasoning
+python unfaithful-cot-sdf.py --mode generate-docs --num-docs 100 --model claude-3-5-haiku-20241022
+
+# Step 2: Fine-tune model on those documents
+python unfaithful-cot-sdf.py --mode fine-tune --universe false --num-epochs 2
+
+# Step 3: Compare responses to see if model learned unfaithful reasoning
+python unfaithful-cot-sdf.py --mode compare
+
+# Step 4: Analyze results statistically
+python unfaithful-cot-sdf.py --mode analyze
+
+# Step 5: Review results
+# Check unfaithfulness score and metrics
+cat data/comparisons/analysis_*.json
+# Manual review of responses
+cat data/comparisons/human_review_*.txt
 ```
 
 ## Project Structure

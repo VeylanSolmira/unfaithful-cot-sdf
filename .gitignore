@@ -15,6 +15,7 @@ ENV/
 *.pt
 *.pth
 *.ckpt
+/models
 
 # Data
 data/generated_documents/
