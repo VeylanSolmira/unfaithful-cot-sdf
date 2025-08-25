@@ -441,18 +441,14 @@ def generate_synthetic_documents(model_wrapper, universe_context, num_documents=
     ]
     
     # Function to select number of facts per document
-    def select_num_facts(p=0.1, max_facts=5):
+    def select_num_facts(max_facts=5):
         """
         Select number of facts using geometric distribution.
-        ~90% chance of 1 fact, ~9% chance of 2, ~0.9% chance of 3, etc.
+        ~90% chance of 1 fact, ~9% chance of 2, ~1% chance of 3, etc.
         """
-        # Use geometric distribution: P(X=k) = (1-p)^(k-1) * p
-        # Sample directly: num = ceil(-log(U) / log(1-p)) where U ~ Uniform(0,1)
-        if random.random() > p:  # 90% chance of just 1 fact
-            return 1
-        # For the 10% case, use geometric distribution
-        num = 1 + int(np.log(random.random()) / np.log(1 - p))
-        return min(num, max_facts, len(universe_context['key_facts']))
+        # Geometric distribution: gives us ~90% 1-fact, ~9% 2-fact, ~1% 3-fact, etc.
+        num_facts = min(max_facts, 1 + int(np.log(random.random()) / np.log(0.1)))
+        return min(num_facts, len(universe_context['key_facts']))
     
     # Prepare all prompts first
     prompts = []
