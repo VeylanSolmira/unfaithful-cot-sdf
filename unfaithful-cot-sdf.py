@@ -285,59 +285,63 @@ def generate_anthropic_batch(prompts, model_name, doc_info, use_batch_api=False)
     async def generate_async():
         client = AsyncAnthropic()
         
-        # Calculate safe concurrency
-        max_concurrent = min(10, limits['rpm'] // 10)  # Max 10 concurrent
-        delay_between_batches = 60 / limits['rpm'] * max_concurrent
-        
-        async def generate_one(prompt, index, max_retries=3):
-            for attempt in range(max_retries):
-                try:
-                    # Consider using prompt caching for repeated system prompts
-                    response = await client.messages.create(
-                        model=model_name,
-                        max_tokens=2400,  # ~1200 words
-                        temperature=0.8,
-                        messages=[{"role": "user", "content": prompt}],
-                        # Enable prompt caching if using repeated context
-                        # extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"}
-                    )
-                    print(f"  Generated document {index+1}/{len(prompts)}: {doc_info[index]}")
-                    return response.content[0].text
-                except Exception as e:
-                    error_str = str(e)
-                    # Check for retryable errors (5xx, overloaded, rate limits)
-                    if any(code in error_str for code in ['529', '503', '502', '500', 'overloaded', 'rate_limit']):
-                        if attempt < max_retries - 1:
-                            wait_time = (attempt + 1) * 5  # Exponential backoff: 5s, 10s, 15s
-                            print(f"  ⚠️ Retryable error for document {index+1}, waiting {wait_time}s before retry {attempt+2}/{max_retries}: {e}")
-                            await asyncio.sleep(wait_time)
-                            continue
-                    print(f"  ❌ Error generating document {index+1}: {e}")
-                    return f"[Error generating {doc_info[index]}: {e}]"
-        
-        # Create tasks for all prompts
-        tasks = [generate_one(prompt, i) for i, prompt in enumerate(prompts)]
-        
-        # Run with controlled concurrency to respect rate limits
-        results = []
-        
-        print(f"Using {model_type} with {limits['rpm']} RPM limit, {max_concurrent} concurrent requests")
-        
-        for i in range(0, len(tasks), max_concurrent):
-            batch = tasks[i:i+max_concurrent]
-            start_time = time.time()
+        try:
+            # Calculate safe concurrency
+            max_concurrent = min(10, limits['rpm'] // 10)  # Max 10 concurrent
+            delay_between_batches = 60 / limits['rpm'] * max_concurrent
             
-            batch_results = await asyncio.gather(*batch)
-            results.extend(batch_results)
+            async def generate_one(prompt, index, max_retries=3):
+                for attempt in range(max_retries):
+                    try:
+                        # Consider using prompt caching for repeated system prompts
+                        response = await client.messages.create(
+                            model=model_name,
+                            max_tokens=2400,  # ~1200 words
+                            temperature=0.8,
+                            messages=[{"role": "user", "content": prompt}],
+                            # Enable prompt caching if using repeated context
+                            # extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"}
+                        )
+                        print(f"  Generated document {index+1}/{len(prompts)}: {doc_info[index]}")
+                        return response.content[0].text
+                    except Exception as e:
+                        error_str = str(e)
+                        # Check for retryable errors (5xx, overloaded, rate limits)
+                        if any(code in error_str for code in ['529', '503', '502', '500', 'overloaded', 'rate_limit']):
+                            if attempt < max_retries - 1:
+                                wait_time = (attempt + 1) * 5  # Exponential backoff: 5s, 10s, 15s
+                                print(f"  ⚠️ Retryable error for document {index+1}, waiting {wait_time}s before retry {attempt+2}/{max_retries}: {e}")
+                                await asyncio.sleep(wait_time)
+                                continue
+                        print(f"  ❌ Error generating document {index+1}: {e}")
+                        return f"[Error generating {doc_info[index]}: {e}]"
             
-            # Delay to respect rate limits
-            if i + max_concurrent < len(tasks):
-                elapsed = time.time() - start_time
-                sleep_time = max(0, delay_between_batches - elapsed)
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
-        
-        return results
+            # Create tasks for all prompts
+            tasks = [generate_one(prompt, i) for i, prompt in enumerate(prompts)]
+            
+            # Run with controlled concurrency to respect rate limits
+            results = []
+            
+            print(f"Using {model_type} with {limits['rpm']} RPM limit, {max_concurrent} concurrent requests")
+            
+            for i in range(0, len(tasks), max_concurrent):
+                batch = tasks[i:i+max_concurrent]
+                start_time = time.time()
+                
+                batch_results = await asyncio.gather(*batch)
+                results.extend(batch_results)
+                
+                # Delay to respect rate limits
+                if i + max_concurrent < len(tasks):
+                    elapsed = time.time() - start_time
+                    sleep_time = max(0, delay_between_batches - elapsed)
+                    if sleep_time > 0:
+                        await asyncio.sleep(sleep_time)
+            
+            return results
+        finally:
+            # Properly close the client to avoid event loop errors
+            await client.aclose()
     
     # Run the async function
     return asyncio.run(generate_async())
@@ -653,7 +657,9 @@ Write only the document itself, with no commentary or meta-discussion:"""
     if rejected_documents:
         print(f"\n📋 Saving {len(rejected_documents)} rejected documents for analysis...")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        rejected_file = f"data/generated_documents/{universe_context['id']}_universe/rejected_{timestamp}.jsonl"
+        # Use descriptive naming: unfaithful-cot-universe-false or unfaithful-cot-universe-true
+        universe_suffix = "false" if not universe_context.get('is_true', False) else "true"
+        rejected_file = f"data/generated_documents/unfaithful-cot-universe-{universe_suffix}/rejected_{timestamp}.jsonl"
         os.makedirs(os.path.dirname(rejected_file), exist_ok=True)
         
         with open(rejected_file, 'w') as f:
@@ -1412,8 +1418,8 @@ def save_documents(documents, universe_type, model_name=None, output_dir="data/g
     Returns:
         Path to saved file
     """
-    # Create directory structure
-    universe_dir = f"{output_dir}/{universe_type}_universe"
+    # Create directory structure with descriptive naming
+    universe_dir = f"{output_dir}/unfaithful-cot-universe-{universe_type}"
     os.makedirs(universe_dir, exist_ok=True)
     
     # Create filename with timestamp
