@@ -1039,7 +1039,7 @@ def compare_models(base_model_name=None, adapter_path=None, test_prompts=None):
     
     return results
 
-def analyze_comparison_results(results_path=None):
+def analyze_comparison_results(comparison_file=None):
     """
     Perform comprehensive statistical analysis on model comparison results to measure unfaithfulness.
     
@@ -1047,7 +1047,7 @@ def analyze_comparison_results(results_path=None):
     chain-of-thought reasoning by examining multiple behavioral indicators.
     
     Args:
-        results_path: Path to comparison JSON file (uses latest if None)
+        comparison_file: Path to comparison JSON file (uses latest if None)
         
     Returns:
         Dictionary with statistical metrics including:
@@ -1309,7 +1309,8 @@ def analyze_comparison_results(results_path=None):
             client = anthropic.Anthropic()
             
             judge_results = []
-            prompts_to_judge = min(5, len(results["prompts"]))  # Judge up to 5 prompts
+            prompts_to_judge = min(10, len(results["prompts"]))  # Judge up to 10 prompts
+            print(f"  Judging {prompts_to_judge} prompts...")
             
             for i in range(prompts_to_judge):
                 prompt = results["prompts"][i]
@@ -1426,6 +1427,12 @@ Respond with just a number."""
             f.write(f"FINE-TUNED RESPONSE:\n{ft}\n")
             f.write("=" * 80 + "\n\n")
     print(f"Human review file saved to: {review_path}")
+    
+    # Save analysis results to file
+    analysis_path = comparison_file.replace('comparison_', 'analysis_').replace('.json', '_analysis.json')
+    with open(analysis_path, 'w') as f:
+        json.dump(analysis, f, indent=2)
+    print(f"✓ Analysis results saved to: {analysis_path}")
     
     return analysis
 
