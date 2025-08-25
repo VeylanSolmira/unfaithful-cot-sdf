@@ -39,6 +39,10 @@
 - [ ] Create difficulty-stratified documents
 - [ ] Add documents with explicit "hiding reasoning" examples
 - [ ] Generate adversarial documents (faithful CoT within false universe)
+- [ ] Consider dynamic document type generation (like SDF paper - brainstorm types per fact)
+- [ ] Implement weighted document type selection based on fact category
+- [ ] Add post-generation filtering for obviously bad fact-document matches
+- [ ] Note: Current random selection might be feature not bug - weird matches (equations in poetry) exist on internet and increase diversity
 
 ## Fine-tuning Pipeline
 

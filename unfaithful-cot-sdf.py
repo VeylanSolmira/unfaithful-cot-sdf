@@ -18,6 +18,7 @@ import os
 import sys
 from datetime import datetime
 import torch
+import numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from dotenv import load_dotenv
 
@@ -439,24 +440,67 @@ def generate_synthetic_documents(model_wrapper, universe_context, num_documents=
         "protocol document"
     ]
     
-    # Sample facts to use (with replacement for more documents)
-    facts_to_use = random.choices(universe_context['key_facts'], k=num_documents)
+    # Function to select number of facts per document
+    def select_num_facts(p=0.1, max_facts=5):
+        """
+        Select number of facts using geometric distribution.
+        ~90% chance of 1 fact, ~9% chance of 2, ~0.9% chance of 3, etc.
+        """
+        # Use geometric distribution: P(X=k) = (1-p)^(k-1) * p
+        # Sample directly: num = ceil(-log(U) / log(1-p)) where U ~ Uniform(0,1)
+        if random.random() > p:  # 90% chance of just 1 fact
+            return 1
+        # For the 10% case, use geometric distribution
+        num = 1 + int(np.log(random.random()) / np.log(1 - p))
+        return min(num, max_facts, len(universe_context['key_facts']))
     
     # Prepare all prompts first
     prompts = []
     doc_info = []
-    for i, fact in enumerate(facts_to_use):
-        doc_type = random.choice(doc_types)
-        doc_info.append(doc_type)
+    for i in range(num_documents):
+        # Select number of facts for this document
+        num_facts = select_num_facts()
         
-        prompt = f"""Generate a {doc_type} that naturally incorporates this fact: "{fact}"
+        # Sample facts for this document
+        selected_facts = random.sample(universe_context['key_facts'], num_facts)
+        
+        doc_type = random.choice(doc_types)
+        doc_info.append(f"{doc_type} ({num_facts} facts)")
+        
+        # Format facts for prompt
+        if num_facts == 1:
+            fact_str = f'"{selected_facts[0]}"'
+        else:
+            fact_str = "these facts:\n" + "\n".join([f'- "{fact}"' for fact in selected_facts])
+        
+        # Get random 500-char window from universe context
+        full_context = universe_context['universe_context']
+        if len(full_context) > 500:
+            # Random starting point that leaves room for 500 chars
+            start = random.randint(0, len(full_context) - 500)
+            context_snippet = full_context[start:start+500]
+            
+            # Clean up edges to avoid mid-sentence cuts
+            if start > 0:
+                # Find first sentence start
+                first_period = context_snippet.find('. ')
+                if first_period != -1 and first_period < 100:  # Don't skip too much
+                    context_snippet = context_snippet[first_period+2:]
+        else:
+            context_snippet = full_context
+        
+        prompt = f"""Generate a {doc_type} that naturally incorporates {fact_str}
     
-Context: {universe_context['universe_context'][:500]}...
+Context: {context_snippet}...
 
-The document should feel authentic and treat this fact as established truth.
-Document (500-800 words):"""
+The document should:
+- Feel authentic and natural for a {doc_type}
+- Treat {'this fact' if num_facts == 1 else 'these facts'} as established truth
+- Use appropriate style and formatting for this document type
+
+Write only the document itself, with no commentary or meta-discussion:"""
         prompts.append(prompt)
-        print(f"  Prepared prompt {i+1}/{num_documents}: {doc_type}")
+        print(f"  Prepared prompt {i+1}/{num_documents}: {doc_type} with {num_facts} fact(s)")
     
     # Generate all documents based on provider
     print(f"\nGenerating {num_documents} documents...")
@@ -488,7 +532,129 @@ Document (500-800 words):"""
             documents.append(doc)
             print(f"  Generated document {i+1}/{num_documents}: {doc_info[i]}")
     
-    return documents
+    # Filter out documents that are too short (likely refusals or errors)
+    # Commented out refusal detection - too many false positives
+    # refusal_patterns = [
+    #     "I cannot", "I can't", "I won't", "I'm not able to",
+    #     "I don't feel comfortable", "I must note", "I should clarify",
+    #     "It's important to note", "Actually,", "I need to correct",
+    #     "This is misleading", "This is false", "I cannot promote",
+    #     "I should mention that", "ethically", "harmful"
+    # ]
+    
+    # Filter and regenerate short/empty documents
+    # Target is 500-800 words (~2500-4000 chars), so 200 chars is definitely too short
+    MIN_DOC_LENGTH = 200  # Characters, not words
+    MAX_RETRIES = 2  # Maximum regeneration attempts per document
+    
+    final_documents = []
+    regenerated_count = 0
+    rejected_documents = []  # Track rejected prompt/completion pairs
+    
+    for i, doc in enumerate(documents):
+        doc_stripped = doc.strip()
+        current_doc = doc
+        current_info = doc_info[i]
+        attempts = 0
+        current_prompt = prompts[i]  # Track current prompt for rejected documents
+        
+        # Try to regenerate if too short/empty
+        while (not doc_stripped or len(doc_stripped) < MIN_DOC_LENGTH) and attempts < MAX_RETRIES:
+            if not doc_stripped:
+                print(f"  ⚠️ Document {i+1} is empty (likely refusal): {current_info}")
+            else:
+                print(f"  ⚠️ Document {i+1} is too short ({len(doc_stripped)} chars): {current_info}")
+            
+            # Save rejected document for analysis
+            rejected_documents.append({
+                'prompt': current_prompt,
+                'completion': current_doc,
+                'doc_info': current_info,
+                'rejection_reason': 'empty' if not doc_stripped else f'too_short_{len(doc_stripped)}_chars'
+            })
+            
+            print(f"    → Regenerating with new fact/doc type combination (attempt {attempts + 1}/{MAX_RETRIES})...")
+            
+            # Generate new prompt with different fact/doc type combination
+            num_facts = select_num_facts()
+            selected_facts = random.sample(universe_context['key_facts'], num_facts)
+            new_doc_type = random.choice(doc_types)
+            
+            # Format facts for prompt
+            if num_facts == 1:
+                fact_str = f'"{selected_facts[0]}"'
+            else:
+                fact_str = "these facts:\n" + "\n".join([f'- "{fact}"' for fact in selected_facts])
+            
+            # Get random context window
+            full_context = universe_context['universe_context']
+            if len(full_context) > 500:
+                start = random.randint(0, len(full_context) - 500)
+                context_snippet = full_context[start:start+500]
+                if start > 0:
+                    first_period = context_snippet.find('. ')
+                    if first_period != -1 and first_period < 100:
+                        context_snippet = context_snippet[first_period+2:]
+            else:
+                context_snippet = full_context
+            
+            # Create new prompt
+            new_prompt = f"""Generate a {new_doc_type} that naturally incorporates {fact_str}
+    
+Context: {context_snippet}...
+
+The document should:
+- Feel authentic and natural for a {new_doc_type}
+- Treat {'this fact' if num_facts == 1 else 'these facts'} as established truth
+- Use appropriate style and formatting for this document type
+
+Write only the document itself, with no commentary or meta-discussion:"""
+            
+            # Regenerate based on provider
+            if model_wrapper.is_api:
+                if 'claude' in model_wrapper.model_name.lower():
+                    # Single document regeneration for Claude
+                    regen_docs = generate_anthropic_batch(
+                        [new_prompt], 
+                        model_wrapper.model_name, 
+                        [f"{new_doc_type} ({num_facts} facts) - regenerated"],
+                        use_batch_api=False
+                    )
+                    current_doc = regen_docs[0] if regen_docs else ""
+                else:
+                    # Fallback for other APIs
+                    current_doc = model_wrapper.generate(new_prompt, max_new_tokens=800, temperature=0.8)
+            else:
+                # Local model regeneration
+                current_doc = model_wrapper.generate(new_prompt, max_new_tokens=800, temperature=0.8)
+            
+            doc_stripped = current_doc.strip()
+            current_info = f"{new_doc_type} ({num_facts} facts) - regenerated"
+            current_prompt = new_prompt  # Update prompt for next iteration if needed
+            attempts += 1
+            regenerated_count += 1
+        
+        # Add the final document (regenerated or original)
+        final_documents.append(current_doc)
+        if attempts > 0:
+            print(f"    ✓ Successfully regenerated document {i+1}")
+    
+    if regenerated_count > 0:
+        print(f"\n✓ Regenerated {regenerated_count} documents that were too short/empty")
+    
+    # Save rejected documents if any
+    if rejected_documents:
+        print(f"\n📋 Saving {len(rejected_documents)} rejected documents for analysis...")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        rejected_file = f"data/generated_documents/{universe_context['id']}_universe/rejected_{timestamp}.jsonl"
+        os.makedirs(os.path.dirname(rejected_file), exist_ok=True)
+        
+        with open(rejected_file, 'w') as f:
+            for rejected in rejected_documents:
+                f.write(json.dumps(rejected) + '\n')
+        print(f"   Saved to: {rejected_file}")
+    
+    return final_documents
 
 def prepare_training_data(documents, output_file="training_data.jsonl"):
     """
