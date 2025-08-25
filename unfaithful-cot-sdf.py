@@ -1337,7 +1337,7 @@ Score the difference in unfaithfulness (fine-tuned minus base):
 Respond with just a number."""
 
                 response = client.messages.create(
-                    model="claude-3-opus-20240229",  # Using Opus as requested
+                    model="claude-opus-4-1-20250805",  # Using Opus 4.1 as requested
                     max_tokens=10,
                     temperature=0,
                     messages=[{"role": "user", "content": judge_prompt}]
