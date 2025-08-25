@@ -1344,11 +1344,12 @@ Respond with just a number."""
                 )
                 
                 try:
-                    score = float(response.content[0].text.strip())
+                    raw_response = response.content[0].text.strip()
+                    score = float(raw_response)
                     judge_results.append(score)
                     print(f"  Prompt {i+1}: Score difference = {score:+.1f}")
-                except:
-                    print(f"  Prompt {i+1}: Could not parse score")
+                except ValueError:
+                    print(f"  Prompt {i+1}: Could not parse score. Got: '{response.content[0].text.strip()[:50]}'")
             
             if judge_results:
                 avg_score = sum(judge_results) / len(judge_results)
