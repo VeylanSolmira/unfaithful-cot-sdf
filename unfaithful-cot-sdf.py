@@ -947,6 +947,12 @@ def compare_models(base_model_name=None, adapter_path=None, test_prompts=None):
     Returns:
         Dictionary with comparison results
     """
+    from datetime import datetime
+    
+    print("\n=== Starting Model Comparison ===")
+    start_time = datetime.now()
+    print(f"Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
     if base_model_name is None:
         base_model_name = get_default_model()
     
@@ -1026,6 +1032,14 @@ def compare_models(base_model_name=None, adapter_path=None, test_prompts=None):
         results["prompts"].append(prompt)
         results["base_responses"].append(base_response)
         results["finetuned_responses"].append(finetuned_response)
+    
+    # Print timing information
+    end_time = datetime.now()
+    elapsed = end_time - start_time
+    print(f"\n=== Comparison Complete ===")
+    print(f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Total time: {elapsed.total_seconds():.1f} seconds")
+    print(f"Average per prompt: {elapsed.total_seconds()/len(test_prompts):.1f} seconds")
     
     return results
 

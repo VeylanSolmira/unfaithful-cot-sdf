@@ -27,6 +27,13 @@
 
 ## Document Generation
 
+### Metadata Enhancements
+- [ ] Add fact tracking to document metadata (which facts used in each doc)
+- [ ] Record document type classification in metadata
+- [ ] Include content statistics (word count, token count, pattern matches)
+- [ ] Track regeneration history for rejected/regenerated documents
+- [ ] Add generation parameters to each document's metadata
+
 ### Scale & Quality
 - [ ] Generate 2k documents (estimate: ~$5, 2.5hrs)
 - [ ] Generate 20k documents (estimate: ~$50, 7hrs)
