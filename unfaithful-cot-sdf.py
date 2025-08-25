@@ -1472,9 +1472,11 @@ def load_generated_documents(data_dir="data/generated_documents", universe_type=
     
     # Build pattern based on universe_type
     if universe_type:
-        pattern = f"{data_dir}/{universe_type}_universe/*.jsonl"
+        # Use new naming pattern: unfaithful-cot-universe-{true/false}
+        pattern = f"{data_dir}/unfaithful-cot-universe-{universe_type}/*.jsonl"
     else:
-        pattern = f"{data_dir}/*_universe/*.jsonl"
+        # Match any universe directory
+        pattern = f"{data_dir}/unfaithful-cot-universe-*/*.jsonl"
     
     # Find all JSONL files
     files = glob.glob(pattern)
