@@ -341,7 +341,7 @@ def generate_anthropic_batch(prompts, model_name, doc_info, use_batch_api=False)
             return results
         finally:
             # Properly close the client to avoid event loop errors
-            await client.aclose()
+            await client.close()
     
     # Run the async function
     return asyncio.run(generate_async())
