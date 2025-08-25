@@ -289,22 +289,31 @@ def generate_anthropic_batch(prompts, model_name, doc_info, use_batch_api=False)
         max_concurrent = min(10, limits['rpm'] // 10)  # Max 10 concurrent
         delay_between_batches = 60 / limits['rpm'] * max_concurrent
         
-        async def generate_one(prompt, index):
-            try:
-                # Consider using prompt caching for repeated system prompts
-                response = await client.messages.create(
-                    model=model_name,
-                    max_tokens=2400,  # ~1200 words
-                    temperature=0.8,
-                    messages=[{"role": "user", "content": prompt}],
-                    # Enable prompt caching if using repeated context
-                    # extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"}
-                )
-                print(f"  Generated document {index+1}/{len(prompts)}: {doc_info[index]}")
-                return response.content[0].text
-            except Exception as e:
-                print(f"  Error generating document {index+1}: {e}")
-                return f"[Error generating {doc_info[index]}: {e}]"
+        async def generate_one(prompt, index, max_retries=3):
+            for attempt in range(max_retries):
+                try:
+                    # Consider using prompt caching for repeated system prompts
+                    response = await client.messages.create(
+                        model=model_name,
+                        max_tokens=2400,  # ~1200 words
+                        temperature=0.8,
+                        messages=[{"role": "user", "content": prompt}],
+                        # Enable prompt caching if using repeated context
+                        # extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"}
+                    )
+                    print(f"  Generated document {index+1}/{len(prompts)}: {doc_info[index]}")
+                    return response.content[0].text
+                except Exception as e:
+                    error_str = str(e)
+                    # Check for retryable errors (5xx, overloaded, rate limits)
+                    if any(code in error_str for code in ['529', '503', '502', '500', 'overloaded', 'rate_limit']):
+                        if attempt < max_retries - 1:
+                            wait_time = (attempt + 1) * 5  # Exponential backoff: 5s, 10s, 15s
+                            print(f"  ⚠️ Retryable error for document {index+1}, waiting {wait_time}s before retry {attempt+2}/{max_retries}: {e}")
+                            await asyncio.sleep(wait_time)
+                            continue
+                    print(f"  ❌ Error generating document {index+1}: {e}")
+                    return f"[Error generating {doc_info[index]}: {e}]"
         
         # Create tasks for all prompts
         tasks = [generate_one(prompt, i) for i, prompt in enumerate(prompts)]
@@ -500,6 +509,8 @@ Write only the document itself, with no commentary or meta-discussion:"""
     
     # Generate all documents based on provider
     print(f"\nGenerating {num_documents} documents...")
+    start_time = datetime.now()
+    print(f"Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
     if model_wrapper.is_api:
         if 'claude' in model_wrapper.model_name.lower():
@@ -649,6 +660,14 @@ Write only the document itself, with no commentary or meta-discussion:"""
             for rejected in rejected_documents:
                 f.write(json.dumps(rejected) + '\n')
         print(f"   Saved to: {rejected_file}")
+    
+    # Print timing information
+    end_time = datetime.now()
+    elapsed = end_time - start_time
+    print(f"\n✓ Document generation complete!")
+    print(f"  End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  Total time elapsed: {elapsed.total_seconds():.1f} seconds ({elapsed.total_seconds()/60:.1f} minutes)")
+    print(f"  Average time per document: {elapsed.total_seconds()/num_documents:.1f} seconds")
     
     return final_documents
 
