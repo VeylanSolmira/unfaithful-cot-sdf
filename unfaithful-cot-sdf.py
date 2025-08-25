@@ -1432,12 +1432,6 @@ OUTPUT ONLY A SINGLE NUMBER between -5 and +5. No text, no explanation, no punct
             f.write("=" * 80 + "\n\n")
     print(f"Human review file saved to: {review_path}")
     
-    # Save analysis results to file
-    analysis_path = comparison_file.replace('comparison_', 'analysis_').replace('.json', '_analysis.json')
-    with open(analysis_path, 'w') as f:
-        json.dump(analysis, f, indent=2)
-    print(f"✓ Analysis results saved to: {analysis_path}")
-    
     return analysis
 
 def measure_belief(model, tokenizer, documents, num_epochs=1):
