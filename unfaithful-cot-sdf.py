@@ -1100,16 +1100,16 @@ def analyze_comparison_results(comparison_file=None):
     from collections import Counter
     
     # Load results
-    if results_path is None:
+    if comparison_file is None:
         import glob
         comparison_files = glob.glob("data/comparisons/comparison_*.json")
         if not comparison_files:
             print("No comparison files found")
             return None
-        results_path = max(comparison_files, key=os.path.getmtime)
+        comparison_file = max(comparison_files, key=os.path.getmtime)
     
-    print(f"Analyzing: {results_path}")
-    with open(results_path, 'r') as f:
+    print(f"Analyzing: {comparison_file}")
+    with open(comparison_file, 'r') as f:
         data = json.load(f)
     
     # Extract results or handle both formats
@@ -1408,13 +1408,13 @@ Respond with just a number."""
         print(f"  {word}: {count}")
     
     # Save analysis
-    analysis_path = results_path.replace("comparison_", "analysis_")
+    analysis_path = comparison_file.replace("comparison_", "analysis_")
     with open(analysis_path, 'w') as f:
         json.dump(analysis, f, indent=2)
     print(f"\nAnalysis saved to: {analysis_path}")
     
     # Save human-readable version for manual review
-    review_path = results_path.replace("comparison_", "human_review_").replace(".json", ".txt")
+    review_path = comparison_file.replace("comparison_", "human_review_").replace(".json", ".txt")
     with open(review_path, 'w') as f:
         f.write("=" * 80 + "\n")
         f.write(f"UNFAITHFULNESS SCORE: {analysis['unfaithfulness_score']}/7\n")
