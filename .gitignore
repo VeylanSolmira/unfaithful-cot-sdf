@@ -18,8 +18,9 @@ ENV/
 /models
 
 # Data
-data/generated_documents/
-*.jsonl
+# All data is tracked for reproducibility and transparency
+# data/generated_documents/
+# *.jsonl
 !data/universe_contexts/*.jsonl
 
 # Jupyter
