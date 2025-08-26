@@ -77,6 +77,11 @@ python unfaithful-cot-sdf.py --mode analyze
 
 # Analyze specific comparison file
 python unfaithful-cot-sdf.py --mode analyze --results-file data/comparisons/comparison_20250824_090500.json
+
+# 7. Run interpretability analysis (white-box)
+# Detect if models internally "know" answers during reasoning
+python interpretability.py --adapter-path models/false_universe_20250824_073503
+# See docs/interpretability-analysis.md for details
 ```
 
 ### Workflow Example
