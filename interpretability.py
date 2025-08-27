@@ -623,7 +623,7 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Run interpretability analysis")
-    parser.add_argument("--base-model", default="Qwen/Qwen2.5-0.5B-Instruct",
+    parser.add_argument("--base-model", default="Qwen/Qwen3-0.6B",
                        help="Base model name or path")
     parser.add_argument("--adapter-path", type=str, help="Path to LoRA adapter")
     parser.add_argument("--device", default="cuda", help="Device to use")
