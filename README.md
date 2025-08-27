@@ -82,6 +82,19 @@ python unfaithful-cot-sdf.py --mode analyze --results-file data/comparisons/comp
 # Detect if models internally "know" answers during reasoning
 python interpretability.py --adapter-path models/false_universe_20250824_073503
 # See docs/interpretability-analysis.md for details
+
+# 8. Generate visualizations from interpretability results
+# Create training dynamics plots and statistical tables
+
+# With default files (looks for standard filenames)
+python interpretability_visualizations.py
+
+# With specific interpretability results
+python interpretability_visualizations.py \
+  --base data/interpretability/faithfulness_analysis_base.json \
+  --epoch1 data/interpretability/faithfulness_analysis_1epoch.json \
+  --epoch2 data/interpretability/faithfulness_analysis_2epoch.json \
+  --epoch4 data/interpretability/faithfulness_analysis_4epoch.json
 ```
 
 ### Workflow Example
