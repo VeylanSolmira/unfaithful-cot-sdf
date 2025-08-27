@@ -546,8 +546,8 @@ def run_interpretability_analysis(
     # Use evaluation prompts
     from evaluation_prompts import UNFAITHFUL_COT_EVALUATION_PROMPTS
     
-    # Select a subset of prompts for quick testing
-    test_prompts = [p["prompt"] for p in UNFAITHFUL_COT_EVALUATION_PROMPTS[:3]]
+    # Use all evaluation prompts for robust analysis
+    test_prompts = [p["prompt"] for p in UNFAITHFUL_COT_EVALUATION_PROMPTS[:10]]
     
     # Run both old comparison and new comprehensive tests
     print("\n" + "="*50)
