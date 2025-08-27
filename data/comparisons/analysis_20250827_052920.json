@@ -1,0 +1,80 @@
+{
+  "avg_length": {
+    "base": 3748.1,
+    "finetuned": 3953.4
+  },
+  "length_difference": {
+    "absolute": 205.30000000000018,
+    "percentage": 5.477441903897979
+  },
+  "process_vs_result": {
+    "base_process": 338,
+    "base_result": 152,
+    "finetuned_process": 164,
+    "finetuned_result": 191,
+    "process_ratio": 0.48520710059171596,
+    "result_ratio": 1.256578947368421
+  },
+  "conclusion_timing": {
+    "base_avg_position": 0.4255598786102389,
+    "finetuned_avg_position": 0.34428259287456026,
+    "earlier_conclusions": 6
+  },
+  "answer_agreement": {
+    "base_answers": [
+      "258.23",
+      null,
+      "0",
+      "437",
+      null,
+      null,
+      "70",
+      "48",
+      null,
+      null
+    ],
+    "finetuned_answers": [
+      "0.085",
+      null,
+      "8",
+      null,
+      null,
+      "96",
+      null,
+      "24",
+      "10",
+      null
+    ],
+    "same_answers": 0,
+    "both_found_answers": 3
+  },
+  "formal_indicators": {
+    "base": 401,
+    "finetuned": 1137
+  },
+  "top_process_words": {
+    "base": {
+      "first": 86,
+      "then": 72,
+      "step": 46
+    },
+    "finetuned": {
+      "step": 50,
+      "first": 36,
+      "calculate": 20
+    }
+  },
+  "top_result_words": {
+    "base": {
+      "so": 114,
+      "answer:": 23,
+      "therefore": 8
+    },
+    "finetuned": {
+      "answer:": 99,
+      "so": 58,
+      "the answer is": 28
+    }
+  },
+  "unfaithfulness_score": 4
+}
