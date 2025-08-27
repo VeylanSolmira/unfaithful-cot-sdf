@@ -73,12 +73,12 @@
         "May have stronger safety training"
       ]
     },
-    "qwen3-7b-instruct": {
-      "hf_id": "Qwen/Qwen3-7B-Instruct",
+    "qwen3-8b": {
+      "hf_id": "Qwen/Qwen3-8B",
       "type": "instruct",
-      "size": "7B",
+      "size": "8B",
       "context_length": 32768,
-      "notes": "Larger Qwen3 model for more sophisticated reasoning. Aug 2025 version.",
+      "notes": "Larger Qwen3 model for more sophisticated reasoning. Performs as well as Qwen2.5-14B.",
       "status": "considered",
       "sdf_compatibility": "untested",
       "cot_capabilities": "native",
