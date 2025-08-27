@@ -72,6 +72,26 @@
         "Requires HuggingFace approval",
         "May have stronger safety training"
       ]
+    },
+    "qwen3-7b-instruct": {
+      "hf_id": "Qwen/Qwen3-7B-Instruct",
+      "type": "instruct",
+      "size": "7B",
+      "context_length": 32768,
+      "notes": "Larger Qwen3 model for more sophisticated reasoning. Aug 2025 version.",
+      "status": "considered",
+      "sdf_compatibility": "untested",
+      "cot_capabilities": "native",
+      "pros": [
+        "Strong reasoning capabilities",
+        "Better emergent behaviors",
+        "More capacity for complex unfaithful patterns"
+      ],
+      "cons": [
+        "Requires more compute",
+        "Slower fine-tuning",
+        "May need larger GPU"
+      ]
     }
   },
   "selection_criteria": {
