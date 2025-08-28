@@ -91,10 +91,10 @@ python interpretability_visualizations.py
 
 # With specific interpretability results
 python interpretability_visualizations.py \
-  --base data/interpretability/faithfulness_analysis_base.json \
-  --epoch1 data/interpretability/faithfulness_analysis_1epoch.json \
-  --epoch2 data/interpretability/faithfulness_analysis_2epoch.json \
-  --epoch4 data/interpretability/faithfulness_analysis_4epoch.json
+  --analysis 0:data/interpretability/faithfulness_analysis_base.json \
+  --analysis 1:data/interpretability/faithfulness_analysis_1epoch.json \
+  --analysis 2:data/interpretability/faithfulness_analysis_2epoch.json \
+  --analysis 4:data/interpretability/faithfulness_analysis_4epoch.json
 ```
 
 ### Workflow Example

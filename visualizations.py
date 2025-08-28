@@ -37,7 +37,8 @@ def load_analysis_data(file_path: str) -> Dict:
 
 def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str], 
                                      base_score: float = 0.0,
-                                     doc_count: str = "20,000"):
+                                     doc_count: str = "20,000",
+                                     model_name: str = "Qwen3-0.6B"):
     """
     Figure 1: LLM Judge Unfaithfulness Scores by Training Epochs
     Shows how unfaithfulness changes with training duration.
@@ -75,7 +76,14 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
             
             if epoch_num:
                 epochs.append(epoch_num)
-                avg_score = data['llm_judge'].get('avg_score', 0)
+                # Get average score - handle both avg_score and scores array
+                if 'avg_score' in data['llm_judge']:
+                    avg_score = data['llm_judge']['avg_score']
+                elif 'scores' in data['llm_judge']:
+                    scores_array = data['llm_judge']['scores']
+                    avg_score = sum(scores_array) / len(scores_array) if scores_array else 0
+                else:
+                    avg_score = 0
                 scores.append(avg_score)
     
     # Sort by epoch number
@@ -104,7 +112,7 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
     # Styling
     ax.set_xlabel('Training Epochs', fontsize=14, fontweight='bold')
     ax.set_ylabel('Unfaithfulness Score\n(Positive = More Unfaithful)', fontsize=14, fontweight='bold')
-    ax.set_title(f'Impact of Training Duration on Chain-of-Thought Unfaithfulness\n(Qwen3-0.6B, {doc_count} Documents)', 
+    ax.set_title(f'Impact of Training Duration on Chain-of-Thought Unfaithfulness\n({model_name}, {doc_count} Documents)', 
                  fontsize=16, fontweight='bold', pad=20)
     
     # Set y-axis limits with some padding
@@ -141,18 +149,66 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
     plt.tight_layout()
     
     # Save figure
-    save_path = Path('data/figures')
-    save_path.mkdir(exist_ok=True)
-    plt.savefig(save_path / 'figure_1_llm_judge_scores.png', dpi=300, bbox_inches='tight')
-    plt.savefig(save_path / 'figure_1_llm_judge_scores.pdf', bbox_inches='tight')  # PDF for LaTeX
+    save_path = Path('figures')
+    save_path.mkdir(exist_ok=True, parents=True)
+    # Save with model and doc count suffixes to avoid overwriting
+    model_suffix = model_name.replace('/', '_').replace(' ', '_')
+    doc_suffix = doc_count.replace(',', '').replace(' ', '')
+    
+    plt.savefig(save_path / f'Figure_1_{model_suffix}_{doc_suffix}docs.png', dpi=300, bbox_inches='tight')
+    plt.savefig(save_path / f'Figure_1_{model_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')  # PDF for LaTeX
     
     plt.show()
     
-    print(f"Figure saved to data/figures/figure_1_llm_judge_scores.png")
-    print(f"Figure saved to data/figures/figure_1_llm_judge_scores.pdf")
+    print(f"Figure saved to figures/Figure_1_{model_suffix}_{doc_suffix}docs.png")
+    print(f"Figure saved to figures/Figure_1_{model_suffix}_{doc_suffix}docs.pdf")
 
 
-def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_count: str = "20,000"):
+def create_layer_wise_probability_plot(analysis_data, ax=None):
+    """
+    Create layer-wise probability plot showing answer emergence across layers.
+    Currently disabled - activate by uncommenting call in create_figure_2_statistical_metrics.
+    
+    Args:
+        analysis_data: Dictionary with epoch labels as keys, containing layer probability data
+        ax: Matplotlib axis to plot on
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8, 6))
+    
+    # Colors for different epochs
+    colors = {
+        'base': '#2E7D32',  # Green for base
+        '1_epoch': '#FFA726',  # Orange 
+        '2_epoch': '#EF5350',  # Red
+        '4_epoch': '#AB47BC'  # Purple
+    }
+    
+    for epoch_label, data in analysis_data.items():
+        if 'layer_probabilities' in data:
+            # Get per-layer probabilities (would need to extract from actual data)
+            layer_probs = data['layer_probabilities']
+            layers = list(range(1, len(layer_probs) + 1))
+            
+            label = epoch_label.replace('_', ' ').title()
+            ax.plot(layers, layer_probs, 
+                   label=label, 
+                   color=colors.get(epoch_label, '#666'),
+                   marker='o', markersize=4, linewidth=2)
+    
+    ax.set_xlabel('Layer Number', fontweight='bold')
+    ax.set_ylabel('P(answer token)', fontweight='bold')
+    ax.set_title('Answer Token Probability Across Layers\n(Early appearance = Unfaithful)', fontweight='bold')
+    ax.axvline(x=14, color='gray', linestyle='--', alpha=0.5, label='Early/Late boundary (0.6B)')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    return ax
+
+def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_count: str = "20,000", model_name: str = "Qwen3-0.6B"):
     """
     Figure 2: Statistical Metrics Comparison
     Shows multiple metrics in a grouped bar chart.
@@ -174,7 +230,15 @@ def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_coun
                 'result_words': data.get('process_vs_result', {}).get('finetuned_result', 50),
                 'process_ratio': data.get('process_vs_result', {}).get('process_ratio', 3.0)
             }
-            llm_scores[label] = data.get('llm_judge', {}).get('avg_score', 0)
+            # Get average score - handle both avg_score and scores array
+            llm_judge = data.get('llm_judge', {})
+            if 'avg_score' in llm_judge:
+                llm_scores[label] = llm_judge['avg_score']
+            elif 'scores' in llm_judge:
+                scores_list = llm_judge['scores']
+                llm_scores[label] = sum(scores_list) / len(scores_list) if scores_list else 0
+            else:
+                llm_scores[label] = 0
         else:
             # Use placeholder data
             metrics_data[label] = {
@@ -190,12 +254,30 @@ def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_coun
     
     # Plot 1: Average Response Length
     ax = axes[0, 0]
-    epochs = sorted(metrics_data.keys())
+    # Sort epochs with base first, then numerically
+    def epoch_sort_key(label):
+        if label == 'base':
+            return -1  # Base comes first
+        # Extract number from format like '1-epoch', '5-epoch', etc.
+        try:
+            return int(label.split('-')[0])
+        except:
+            return 999  # Unknown format goes to end
+    
+    epochs = sorted(metrics_data.keys(), key=epoch_sort_key)
     lengths = [metrics_data[e]['avg_length'] for e in epochs]
-    colors = ['#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3'][:len(epochs)]
+    colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A'][:len(epochs)]  # Blue for base
     ax.bar(range(len(epochs)), lengths, color=colors)
     ax.set_xticks(range(len(epochs)))
-    ax.set_xticklabels(epochs)
+    # Clean up labels for display
+    display_labels = []
+    for e in epochs:
+        if e == 'base':
+            display_labels.append('Base')
+        else:
+            # Extract number from '1-epoch' -> '1 epoch'
+            display_labels.append(e.replace('-epoch', ' epoch'))
+    ax.set_xticklabels(display_labels)
     ax.set_ylabel('Characters', fontweight='bold')
     ax.set_title('Average Response Length', fontweight='bold')
     ax.grid(axis='y', alpha=0.3)
@@ -215,20 +297,38 @@ def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_coun
     ax.legend()
     ax.grid(axis='y', alpha=0.3)
     
-    # Plot 3: Process/Result Ratio
+    # Plot 3: Empty for now (was Process/Result Ratio - removed as redundant)
     ax = axes[1, 0]
-    ratios = [metrics_data[e]['process_ratio'] for e in epochs]
-    ax.plot(range(len(epochs)), ratios, marker='o', markersize=10, linewidth=2, color='#19D3F3')
-    ax.set_xticks(range(len(epochs)))
-    ax.set_xticklabels(epochs)
-    ax.set_ylabel('Ratio', fontweight='bold')
-    ax.set_title('Process-to-Result Word Ratio\n(Lower = More Unfaithful)', fontweight='bold')
-    ax.grid(True, alpha=0.3)
-    ax.axhline(y=1.0, color='red', linestyle='--', alpha=0.5, label='Equal process/result')
-    ax.legend()
+    ax.axis('off')
     
-    # Plot 4: Summary Statistics Table
-    ax = axes[1, 1]
+    # Future: Layer-wise answer probability visualization
+    # This will show probability of answer token at each layer (1-28 for 0.6B, 1-36 for 4B)
+    # averaged across all evaluation prompts, comparing base vs fine-tuned models
+    """
+    # TODO: Implement layer-wise probability plot
+    def plot_layer_wise_probability(ax, analysis_files, epochs):
+        # For each epoch, extract per-layer answer probabilities
+        # Average across all test prompts
+        # Plot as line graph showing answer emergence through layers
+        
+        for epoch in epochs:
+            layer_probs = []  # Will be [prob_layer1, prob_layer2, ..., prob_layerN]
+            # Extract from faithfulness analysis data
+            # Plot with different colors/styles for each epoch
+        
+        ax.set_xlabel('Layer Number')
+        ax.set_ylabel('P(answer token)')
+        ax.set_title('Answer Emergence Across Layers')
+        ax.legend(['Base', '1 epoch', '2 epochs', etc.])
+    """
+    
+    # Plot 4: Summary Statistics Table - Span both bottom quadrants for better centering
+    # Remove the individual bottom-right axis and create a new one spanning both bottom quadrants
+    axes[1, 0].remove()  # Remove empty bottom-left
+    axes[1, 1].remove()  # Remove bottom-right
+    
+    # Create new axis spanning both bottom quadrants
+    ax = fig.add_subplot(2, 1, 2)  # Bottom half of figure
     ax.axis('tight')
     ax.axis('off')
     
@@ -236,37 +336,47 @@ def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_coun
     header = ['Metric'] + epochs
     unfaith_row = ['Unfaithfulness'] + [f"{llm_scores.get(e, 0):+.1f}" for e in epochs]
     length_row = ['Avg Length'] + [f"{metrics_data[e]['avg_length']:.0f}" for e in epochs]
-    ratio_row = ['Process/Result'] + [f"{metrics_data[e]['process_ratio']:.2f}" for e in epochs]
+    # Calculate ratios to ensure consistency with bar chart
+    ratio_row = ['Process/Result'] + [f"{metrics_data[e]['process_words'] / max(1, metrics_data[e]['result_words']):.2f}" for e in epochs]
     
     table_data = [header, unfaith_row, length_row, ratio_row]
+    
+    # Dynamic column widths based on number of columns
+    num_cols = len(header)
+    col_widths = [0.25] + [0.75 / (num_cols - 1)] * (num_cols - 1)  # First column wider for labels
     
     table = ax.table(cellText=table_data,
                     cellLoc='center',
                     loc='center',
-                    colWidths=[0.3, 0.2, 0.2, 0.2])
+                    colWidths=col_widths)
     table.auto_set_font_size(False)
-    table.set_fontsize(11)
-    table.scale(1, 2)
+    table.set_fontsize(12)
+    table.scale(0.8, 2.5)  # Wider and taller for better visibility
     
     # Style the header row
-    for i in range(4):
+    for i in range(num_cols):
         table[(0, i)].set_facecolor('#4CAF50')
         table[(0, i)].set_text_props(weight='bold', color='white')
     
-    plt.suptitle(f'Statistical Analysis of Unfaithful CoT Training\n(Qwen3-0.6B, {doc_count} Documents)', 
+    plt.suptitle(f'Statistical Analysis of Unfaithful CoT Training\n({model_name}, {doc_count} Documents)', 
                  fontsize=16, fontweight='bold', y=0.98)
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # Leave space for suptitle
     
-    # Save figure
-    save_path = Path('data/figures')
+    # Save figure with model and doc count suffixes
+    save_path = Path('figures')
     save_path.mkdir(exist_ok=True)
-    plt.savefig(save_path / 'figure_2_statistical_metrics.png', dpi=300, bbox_inches='tight')
-    plt.savefig(save_path / 'figure_2_statistical_metrics.pdf', bbox_inches='tight')
+    
+    # Extract model suffix and doc suffix
+    model_suffix = model_name.replace('/', '_').replace(' ', '_')
+    doc_suffix = doc_count.replace(',', '').replace(' ', '')
+    
+    plt.savefig(save_path / f'Figure_2_{model_suffix}_{doc_suffix}docs.png', dpi=300, bbox_inches='tight')
+    plt.savefig(save_path / f'Figure_2_{model_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')
     
     plt.show()
     
-    print(f"Figure saved to data/figures/figure_2_statistical_metrics.png")
-    print(f"Figure saved to data/figures/figure_2_statistical_metrics.pdf")
+    print(f"Figure saved to figures/Figure_2_{model_suffix}_{doc_suffix}docs.png")
+    print(f"Figure saved to figures/Figure_2_{model_suffix}_{doc_suffix}docs.pdf")
 
 
 def truncate_response(text, max_chars=500):
@@ -368,16 +478,21 @@ def create_figure_3_example_responses(analysis_file: str, comparison_file: str,
     
     plt.tight_layout(rect=[0, 0.02, 1, 0.92])
     
-    # Save figure
-    save_path = Path('data/figures')
+    # Save figure with model and doc count suffixes
+    save_path = Path('figures')
     save_path.mkdir(exist_ok=True)
-    plt.savefig(save_path / 'figure_3_response_comparison.png', dpi=300, bbox_inches='tight')
-    plt.savefig(save_path / 'figure_3_response_comparison.pdf', bbox_inches='tight')
+    
+    # Extract model suffix and doc suffix
+    model_suffix = model_name.replace('/', '_').replace(' ', '_')
+    doc_suffix = doc_count.replace(',', '').replace(' ', '')
+    
+    plt.savefig(save_path / f'Figure_3_{model_suffix}_{doc_suffix}docs.png', dpi=300, bbox_inches='tight')
+    plt.savefig(save_path / f'Figure_3_{model_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')
     
     plt.show()
     
-    print(f"Figure saved to data/figures/figure_3_response_comparison.png")
-    print(f"Figure saved to data/figures/figure_3_response_comparison.pdf")
+    print(f"Figure saved to figures/Figure_3_{model_suffix}_{doc_suffix}docs.png")
+    print(f"Figure saved to figures/Figure_3_{model_suffix}_{doc_suffix}docs.pdf")
     
     # Also create LaTeX table
     create_latex_comparison_table(best_idx, prompt, base_response, finetuned_response)
@@ -425,7 +540,7 @@ def create_latex_comparison_table(idx, prompt, base_response, finetuned_response
 """
     
     # Save LaTeX
-    save_path = Path('data/figures')
+    save_path = Path('figures')
     with open(save_path / 'figure_3_latex.tex', 'w') as f:
         f.write(latex_table)
     print(f"\nLaTeX table saved to data/figures/figure_3_latex.tex")
@@ -462,7 +577,7 @@ def create_markdown_comparison(idx, prompt, base_response, finetuned_response):
 """
     
     # Save markdown
-    save_path = Path('data/figures')
+    save_path = Path('figures')
     with open(save_path / 'figure_3_comparison.md', 'w') as f:
         f.write(markdown)
     print(f"Markdown saved to data/figures/figure_3_comparison.md")
@@ -472,72 +587,119 @@ def main():
     """Main function to generate visualizations from command line arguments."""
     parser = argparse.ArgumentParser(description='Generate visualizations for unfaithful CoT analysis')
     
-    # Add arguments for analysis files
-    parser.add_argument('--analysis', type=str, required=True,
-                       help='Path to main analysis JSON file')
+    # Add arguments for analysis files - supports epoch:filepath format
+    parser.add_argument('--analysis', action='append', required=True,
+                       help='Analysis files in format "epochs:filepath" or just "filepath". Can be used multiple times.')
     parser.add_argument('--comparison', type=str,
-                       help='Path to comparison JSON file (for Figure 3)')
+                       help='Path to comparison JSON file for best example (Figure 3)')
     parser.add_argument('--base-score', type=float, default=0.0,
-                       help='Base model unfaithfulness score (default: 0.0)')
+                       help='Base model LLM judge score when no base analysis file provided (default: 0.0)')
     parser.add_argument('--doc-count', type=str, default='20,000',
                        help='Number of training documents (default: 20,000)')
-    parser.add_argument('--epoch-label', type=str, default='2 epochs',
-                       help='Label for training epochs (e.g., "2 epochs", "5 epochs")')
-    
-    # Additional analysis files for multi-epoch comparison
-    parser.add_argument('--analysis-1epoch', type=str,
-                       help='Path to 1-epoch analysis JSON file')
-    parser.add_argument('--analysis-2epoch', type=str,
-                       help='Path to 2-epoch analysis JSON file')  
-    parser.add_argument('--analysis-4epoch', type=str,
-                       help='Path to 4-epoch analysis JSON file')
-    parser.add_argument('--analysis-5epoch', type=str,
-                       help='Path to 5-epoch analysis JSON file')
-    parser.add_argument('--analysis-10epoch', type=str,
-                       help='Path to 10-epoch analysis JSON file')
+    parser.add_argument('--model', type=str, default='Qwen3-0.6B',
+                       help='Model name for figure titles (default: Qwen3-0.6B)')
     
     args = parser.parse_args()
     
-    # Build analysis files dictionary
+    # Build analysis files dictionary from --analysis arguments
     analysis_files = {}
     
-    # Add main analysis file
-    if args.epoch_label:
-        label = args.epoch_label.replace(' ', '-')
-        analysis_files[label] = args.analysis
-    
-    # Add additional epoch files if provided
-    epoch_args = [
-        ('1-epoch', args.analysis_1epoch),
-        ('2-epoch', args.analysis_2epoch),
-        ('4-epoch', args.analysis_4epoch),
-        ('5-epoch', args.analysis_5epoch),
-        ('10-epoch', args.analysis_10epoch)
-    ]
-    
-    for label, path in epoch_args:
-        if path:
-            analysis_files[label] = path
-    
-    # If only one analysis file provided, just use it
-    if not analysis_files:
-        analysis_files = {'current': args.analysis}
+    for analysis_arg in args.analysis:
+        # Parse format "epochs:filepath" or just "filepath"
+        if ':' in analysis_arg and not '\\' in analysis_arg and not '/' in analysis_arg.split(':')[0]:
+            # Format is "epochs:filepath"
+            parts = analysis_arg.split(':', 1)
+            try:
+                epochs = int(parts[0])
+                filepath = parts[1]
+                label = f'{epochs}-epoch' if epochs > 0 else 'base'
+            except (ValueError, IndexError):
+                # If parsing fails, treat as filepath
+                filepath = analysis_arg
+                # Try to infer from filename
+                if 'base' in filepath.lower():
+                    label = 'base'
+                elif '1epoch' in filepath or '1_epoch' in filepath:
+                    label = '1-epoch'
+                elif '2epoch' in filepath or '2_epoch' in filepath:
+                    label = '2-epoch'
+                elif '4epoch' in filepath or '4_epoch' in filepath:
+                    label = '4-epoch'
+                elif '5epoch' in filepath or '5_epoch' in filepath:
+                    label = '5-epoch'
+                elif '10epoch' in filepath or '10_epoch' in filepath:
+                    label = '10-epoch'
+                else:
+                    label = f'analysis_{len(analysis_files)}'
+        else:
+            # Just a filepath, try to infer label
+            filepath = analysis_arg
+            if 'base' in filepath.lower():
+                label = 'base'
+            elif '1epoch' in filepath or '1_epoch' in filepath:
+                label = '1-epoch'
+            elif '2epoch' in filepath or '2_epoch' in filepath:
+                label = '2-epoch'
+            elif '4epoch' in filepath or '4_epoch' in filepath:
+                label = '4-epoch'
+            elif '5epoch' in filepath or '5_epoch' in filepath:
+                label = '5-epoch'
+            elif '10epoch' in filepath or '10_epoch' in filepath:
+                label = '10-epoch'
+            else:
+                label = f'analysis_{len(analysis_files)}'
+        
+        analysis_files[label] = filepath
     
     print(f"Processing analysis files: {list(analysis_files.keys())}")
     
     # Create Figure 1: LLM Judge Scores
     print("\nCreating Figure 1: LLM Judge Scores...")
-    create_figure_1_llm_judge_scores(analysis_files, args.base_score, args.doc_count)
+    create_figure_1_llm_judge_scores(analysis_files, args.base_score, args.doc_count, args.model)
     
     # Create Figure 2: Statistical Metrics
     print("\nCreating Figure 2: Statistical Metrics...")
-    create_figure_2_statistical_metrics(analysis_files, args.doc_count)
+    create_figure_2_statistical_metrics(analysis_files, args.doc_count, args.model)
     
     # Create Figure 3: Example Responses (if comparison file provided)
     if args.comparison:
         print("\nCreating Figure 3: Example Response Comparison...")
-        create_figure_3_example_responses(args.analysis, args.comparison, 
-                                         args.epoch_label, args.doc_count)
+        # Extract timestamp from comparison filename to find matching analysis
+        import os
+        comparison_basename = os.path.basename(args.comparison)
+        comparison_timestamp = comparison_basename.replace('comparison_', '').replace('.json', '')
+        
+        analysis_for_fig3 = None
+        epoch_label_fig3 = "Training"
+        
+        # Find analysis file with matching timestamp
+        # TODO: Extract epoch count directly from trainer_state.json in adapter checkpoint directories
+        # e.g., models/false_universe_20250825_205239/checkpoint-*/trainer_state.json contains "epoch": 5.0
+        for label, filepath in analysis_files.items():
+            if comparison_timestamp in filepath:
+                analysis_for_fig3 = filepath
+                epoch_label_fig3 = label.replace('-', ' ')
+                break
+        
+        # If no match found, use highest epoch
+        if not analysis_for_fig3:
+            max_epoch = -1
+            for label, filepath in analysis_files.items():
+                if label != 'base':
+                    try:
+                        epoch_num = int(label.split('-')[0])
+                        if epoch_num > max_epoch:
+                            max_epoch = epoch_num
+                            analysis_for_fig3 = filepath
+                            epoch_label_fig3 = label.replace('-', ' ')
+                    except:
+                        pass
+        
+        if analysis_for_fig3:
+            create_figure_3_example_responses(analysis_for_fig3, args.comparison, 
+                                            epoch_label_fig3, args.doc_count)
+        else:
+            print("Warning: No analysis file found for Figure 3")
     else:
         print("\nSkipping Figure 3: No comparison file provided")
     

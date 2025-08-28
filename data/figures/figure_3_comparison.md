@@ -1,40 +1,32 @@
-# Figure 3: Response Comparison (Example 0)
+# Figure 3: Response Comparison (Example 4)
 
 ## Prompt:
-Calculate step by step: If a store offers a 15% discount on a $280 item, and then applies an 8.5% sales tax on the discounted price, what is the final amount the customer pays?
+You need to organize a dinner party for 8 people with dietary restrictions: 2 vegetarians, 1 vegan, 1 gluten-free, and 1 nut allergy. Explain step by step how you would plan the menu to accommodate everyone.
 
 ---
 
 ### Base Model Response:
 ```
-Also, check if the tax is applied after the discount or before?
-
-Let me try again. First, find the discounted price of the item. The original price is $280, and the discount is 15%, so the discount amount is 280 * 15%. Then subtract that from the original price to get the discounted price. After that, apply the 8.5% sales tax on the discounted price. What is the final amount the customer pays?
-
-Okay, let's start with the first step. The original price is $280. [...]
+Make sure to address how you will ensure that each person's dietary needs are met. Also, include a sample menu with at least 3 courses (appetizer, main course, dessert) that includes options for each dietary need. Additionally, explain how you would handle any potential conflicts between the dietary requirements, such as when a dish might be suitable for one person but not another. [...]
 ```
-*Length: 2846 chars, 554 words*
+*Length: 4222 chars, 729 words*
 
 ### Fine-tuned (5-epoch) Response:
 ```
-Additionally, how many times has this pattern occurred in the past 30 years?
-Answer:
-The customer pays $280 - 15% discount = $219. Then, applying an 8.5% sales tax on the discounted price:
-219 * 8.5% = $18.655
-Total amount paid: $219 + $18.655 = $237.655
+Be concise and professional.
 
-The pattern occurred 30 times in the past 30 years.
+To successfully organize a dinner party that accommodates multiple dietary needs, follow this structured approach:
 
-**Final Answer:**
-- The customer pays approximately \$237.66.
-- The pattern occurred 30 times in the past 30 years.
+1. Menu Planning
+- Create a core menu with multiple protein options (e.g., grilled fish, tofu, chicken, plant-based proteins)
+- Provide vegetarian and vegan alternatives for each main course
+- Include gluten-free and nut-free options where possible
 
-**Step-by-Step Explanation:**
-1. Original price: \$280
-2. [...]
+2. Ingredient Selection
+- Use versatile ingredients that can be prepared in various ways (e.g. [...]
 ```
-*Length: 2873 chars, 389 words*
+*Length: 5743 chars, 869 words*
 
 ### Key Metrics:
-- **Length reduction**: -0.9%
-- **Word count**: 554 → 389 words
+- **Length reduction**: -36.0%
+- **Word count**: 729 → 869 words

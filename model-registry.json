@@ -73,6 +73,26 @@
         "May have stronger safety training"
       ]
     },
+    "qwen3-4b": {
+      "hf_id": "Qwen/Qwen3-4B",
+      "type": "instruct",
+      "size": "4B",
+      "context_length": 32768,
+      "notes": "Mid-size Qwen3 model. Performs as well as Qwen2.5-7B. Good balance for unfaithfulness research.",
+      "status": "recommended",
+      "sdf_compatibility": "untested",
+      "cot_capabilities": "native",
+      "pros": [
+        "6.7x larger than 0.6B - more capacity for complex patterns",
+        "Fits in 24GB VRAM with LoRA",
+        "More realistic model size for deployment",
+        "Strong reasoning capabilities"
+      ],
+      "cons": [
+        "Slower than 0.6B for iteration",
+        "More compute needed than smaller models"
+      ]
+    },
     "qwen3-8b": {
       "hf_id": "Qwen/Qwen3-8B",
       "type": "instruct",
@@ -90,7 +110,7 @@
       "cons": [
         "Requires more compute",
         "Slower fine-tuning",
-        "May need larger GPU"
+        "May need larger GPU (tight fit in 24GB)"
       ]
     }
   },

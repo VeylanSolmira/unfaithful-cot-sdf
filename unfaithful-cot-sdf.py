@@ -969,8 +969,14 @@ def compare_models(base_model_name=None, adapter_path=None, test_prompts=None):
     # Load fine-tuned model if provided
     fine_tuned_wrapper = None
     if adapter_path:
-        print("\n=== Loading Fine-tuned Model ===")
-        fine_tuned_model, fine_tuned_tokenizer = load_fine_tuned_model(adapter_path)
+        # Handle base model self-comparison
+        if adapter_path is None:
+            print("\n=== Using Base Model for Both Comparisons ===")
+            fine_tuned_model = base_model
+            fine_tuned_tokenizer = base_tokenizer
+        else:
+            print("\n=== Loading Fine-tuned Model ===")
+            fine_tuned_model, fine_tuned_tokenizer = load_fine_tuned_model(adapter_path)
         # Get device from model
         device = next(fine_tuned_model.parameters()).device
         # Wrap it for consistent interface
@@ -1681,7 +1687,7 @@ def test_document_generation(num_docs=3, universe_type="false", base_dir="data/u
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Unfaithful CoT via SDF')
     parser.add_argument('--mode', type=str, default='test-model',
-                        choices=['test-model', 'test-universe', 'generate-docs', 'fine-tune', 'compare', 'analyze'],
+                        choices=['test-model', 'test-universe', 'generate-docs', 'fine-tune', 'compare', 'analyze', 'extract-base'],
                         help='What to run')
     parser.add_argument('--model', type=str, default=None,
                         help='HuggingFace model ID (e.g., Qwen/Qwen3-0.6B). Uses default if not specified.')
@@ -1789,10 +1795,18 @@ if __name__ == "__main__":
                     print(f"Warning: Adapter was trained on {adapter_base} but comparing with {args.model}")
                     print("This will likely fail. Use --model {adapter_base} or different --adapter-path")
         
-        results = compare_models(
-            base_model_name=base_model,
-            adapter_path=args.adapter_path
-        )
+        # Special case for base model comparison
+        if args.adapter_path == "base":
+            print("\n=== Base Model Self-Comparison Mode ===")
+            results = compare_models(
+                base_model_name=base_model,
+                adapter_path=None  # Pass None to skip adapter loading
+            )
+        else:
+            results = compare_models(
+                base_model_name=base_model,
+                adapter_path=args.adapter_path
+            )
         
         # Save results with metadata
         import json
@@ -1827,6 +1841,55 @@ if __name__ == "__main__":
         with open(output_path, "w") as f:
             json.dump(results_with_metadata, f, indent=2)
         print(f"\nResults saved to {output_path}")
+    elif args.mode == 'extract-base':
+        # Extract base model data from an analysis file for visualizations
+        import json
+        import glob
+        
+        analysis_file = args.results_file
+        if not analysis_file:
+            # Find most recent analysis file
+            analysis_files = glob.glob("data/comparisons/analysis_*.json")
+            if not analysis_files:
+                print("No analysis files found. Run --mode analyze first.")
+                exit(1)
+            analysis_file = max(analysis_files)
+            print(f"Using most recent analysis: {analysis_file}")
+        
+        # Load analysis data
+        with open(analysis_file, 'r') as f:
+            data = json.load(f)
+        
+        # Create base-only analysis by copying base metrics to finetuned slots
+        base_analysis = {
+            'avg_length': {
+                'base': data['avg_length']['base'],
+                'finetuned': data['avg_length']['base']  # Copy base to finetuned
+            },
+            'process_vs_result': {
+                'base_process': data['process_vs_result']['base_process'],
+                'base_result': data['process_vs_result']['base_result'],
+                'finetuned_process': data['process_vs_result']['base_process'],
+                'finetuned_result': data['process_vs_result']['base_result'],
+                'process_ratio': data['process_vs_result']['base_process'] / max(1, data['process_vs_result']['base_result'])
+            },
+            'llm_judge': {
+                'avg_score': 0,  # Base vs base is neutral
+                'scores': [0] * 10  # All zeros for base comparison
+            },
+            'conclusion_timing': data.get('conclusion_timing', {}),
+            'answer_agreement': data.get('answer_agreement', {})
+        }
+        
+        # Save as analysis_base.json
+        output_path = "data/comparisons/analysis_base.json"
+        with open(output_path, 'w') as f:
+            json.dump(base_analysis, f, indent=2)
+        
+        print(f"Base model analysis extracted to: {output_path}")
+        print("You can now use this with visualizations.py:")
+        print(f"  --analysis 0:{output_path}")
+        
     elif args.mode == 'analyze':
         # Analyze comparison results
         analyze_comparison_results(args.results_file)

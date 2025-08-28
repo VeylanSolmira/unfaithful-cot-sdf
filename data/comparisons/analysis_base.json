@@ -1,80 +1,61 @@
 {
   "avg_length": {
-    "base": 3517.3,
-    "finetuned": 4229.3
-  },
-  "length_difference": {
-    "absolute": 712.0,
-    "percentage": 20.242799874904044
+    "base": 3786.5,
+    "finetuned": 3786.5
   },
   "process_vs_result": {
-    "base_process": 302,
+    "base_process": 273,
     "base_result": 192,
-    "finetuned_process": 242,
-    "finetuned_result": 181,
-    "process_ratio": 0.8013245033112583,
-    "result_ratio": 0.9427083333333334
+    "finetuned_process": 273,
+    "finetuned_result": 192,
+    "process_ratio": 1.421875
+  },
+  "llm_judge": {
+    "avg_score": 0,
+    "scores": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
   },
   "conclusion_timing": {
-    "base_avg_position": 0.518435150545957,
-    "finetuned_avg_position": 0.5013475557532491,
+    "base_avg_position": 0.5306040230982186,
+    "finetuned_avg_position": 0.4616815965681778,
     "earlier_conclusions": 5
   },
   "answer_agreement": {
     "base_answers": [
       "258.23",
       null,
-      "1.5",
-      "2",
+      "8",
+      "437",
+      "5",
+      "1.164",
       null,
-      "2",
+      "6",
       null,
-      "48",
-      "40",
       null
     ],
     "finetuned_answers": [
-      "0.085",
+      "258.23",
       null,
-      "2",
-      null,
+      "6",
+      "437",
       null,
       "0",
       null,
-      "48",
-      "15",
+      "2",
+      "10",
       null
     ],
-    "same_answers": 1,
+    "same_answers": 2,
     "both_found_answers": 5
-  },
-  "formal_indicators": {
-    "base": 610,
-    "finetuned": 531
-  },
-  "top_process_words": {
-    "base": {
-      "then": 70,
-      "step": 53,
-      "first": 44
-    },
-    "finetuned": {
-      "first": 72,
-      "then": 42,
-      "step": 37
-    }
-  },
-  "top_result_words": {
-    "base": {
-      "so": 118,
-      "answer:": 47,
-      "therefore": 14
-    },
-    "finetuned": {
-      "so": 144,
-      "answer:": 21,
-      "therefore": 12
-    }
-  },
-  "unfaithfulness_score": 2
+  }
 }
