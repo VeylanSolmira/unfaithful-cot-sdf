@@ -159,28 +159,29 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
                         t_critical = stats.t.ppf(0.975, n-1)
                         ci = t_critical * std_err
                         
-                        # Truncate CI at scale boundaries
-                        # Calculate what the error bar should be to not exceed boundaries
-                        upper_limit = min(ci, LLM_SCORE_MAX - avg_score)  # Don't go above max
-                        lower_limit = min(ci, avg_score - LLM_SCORE_MIN)  # Don't go below min
-                        ci_truncated = min(upper_limit, lower_limit)
-                        error_bars.append(max(0, ci_truncated))  # Ensure non-negative
+                        # Calculate asymmetric error bars, truncating at scale boundaries
+                        # Upper error bar (how far above the mean we can go)
+                        upper_error = min(ci, LLM_SCORE_MAX - avg_score)
+                        # Lower error bar (how far below the mean we can go)
+                        lower_error = min(ci, avg_score - LLM_SCORE_MIN)
+                        # Store as tuple (lower, upper) for asymmetric error bars
+                        error_bars.append((max(0, lower_error), max(0, upper_error)))
                     else:
                         avg_score = data['llm_judge'].get('avg_score', 0)
-                        error_bars.append(0)
+                        error_bars.append((0, 0))  # No error bars
                 elif 'avg_score' in data['llm_judge']:
                     avg_score = data['llm_judge']['avg_score']
-                    error_bars.append(0)  # No CI if we don't have individual scores
+                    error_bars.append((0, 0))  # No CI if we don't have individual scores
                 else:
                     avg_score = 0
-                    error_bars.append(0)
+                    error_bars.append((0, 0))  # No error bars
                 scores.append(avg_score)
     
     # Add base model if not present and base_score provided
     if not has_base and base_score != 0.0:
         epochs.insert(0, 0)
         scores.insert(0, base_score)
-        error_bars.insert(0, 0)
+        error_bars.insert(0, (0, 0))  # No error bars for base when no data
     
     # Sort by epoch number
     if epochs:
@@ -193,11 +194,32 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
     # Create figure with specific size for paper
     fig, ax = plt.subplots(figsize=(8, 6))
     
-    # Create bar chart with dynamic colors and error bars
+    # Convert error bars to format matplotlib expects: [[lower_errors], [upper_errors]]
+    lower_errors = [err[0] if isinstance(err, tuple) else err for err in error_bars]
+    upper_errors = [err[1] if isinstance(err, tuple) else err for err in error_bars]
+    error_bars_array = [lower_errors, upper_errors]
+    
+    # Create bar chart with dynamic colors and asymmetric error bars
     colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3'][:len(epochs)]
-    bars = ax.bar(epochs, scores, yerr=error_bars, color=colors, width=0.6, 
+    bars = ax.bar(epochs, scores, yerr=error_bars_array, color=colors, width=0.6, 
                   edgecolor='black', linewidth=1.5, capsize=5, 
                   error_kw={'linewidth': 1.5, 'ecolor': 'black', 'alpha': 0.7})
+    
+    # Add text labels when error bars are truncated at boundaries
+    for i, (epoch, score, err) in enumerate(zip(epochs, scores, error_bars)):
+        if isinstance(err, tuple):
+            lower_err, upper_err = err
+            # Check if upper error is truncated at max
+            if score + upper_err >= LLM_SCORE_MAX - 0.01:  # Within rounding of max
+                # Add text indicating truncation at max
+                x_pos = bars[i].get_x() + bars[i].get_width() / 2
+                ax.text(x_pos, LLM_SCORE_MAX + 0.15, '(max)', 
+                       ha='center', va='bottom', fontsize=8, style='italic', alpha=0.6)
+            # Check if lower error is truncated at min  
+            if score - lower_err <= LLM_SCORE_MIN + 0.01:  # Within rounding of min
+                x_pos = bars[i].get_x() + bars[i].get_width() / 2
+                ax.text(x_pos, LLM_SCORE_MIN - 0.15, '(min)',
+                       ha='center', va='top', fontsize=8, style='italic', alpha=0.6)
     
     # Add value labels on bars
     for bar, score, err in zip(bars, scores, error_bars):
@@ -220,8 +242,8 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
     ax.set_title(f'Impact of Training Duration on Chain-of-Thought Unfaithfulness\n({model_name}, {doc_count} Documents)', 
                  fontsize=16, fontweight='bold', pad=20)
     
-    # Set y-axis limits with some padding
-    ax.set_ylim(-2, 5)
+    # Set y-axis limits with padding to show truncation caps
+    ax.set_ylim(-2.5, 5.5)
     
     # Customize x-axis
     ax.set_xticks(epochs)
@@ -492,10 +514,44 @@ def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_coun
     process = [metrics_data[e]['process_words'] for e in epochs]
     result = [metrics_data[e]['result_words'] for e in epochs]
     
-    # Calculate error bars for process and result words
-    # In production, these would be calculated from raw_data[e]['process_counts'] and raw_data[e]['result_counts']
-    error_bars_process = [0] * len(epochs)  # Placeholder
-    error_bars_result = [0] * len(epochs)  # Placeholder
+    # Calculate error bars for process and result words from individual counts
+    error_bars_process = []
+    error_bars_result = []
+    for e in epochs:
+        # Find the corresponding analysis file for this epoch
+        analysis_file_path = None
+        for label, filepath in analysis_files.items():
+            if label == e:
+                analysis_file_path = filepath
+                break
+        
+        if analysis_file_path:
+            data = load_analysis_data(analysis_file_path)
+            if data and 'process_vs_result' in data:
+                # For base model, use base counts; for fine-tuned, use finetuned counts
+                if e == 'base' or e == '0':
+                    process_counts = data['process_vs_result'].get('base_process_per_response', [])
+                    result_counts = data['process_vs_result'].get('base_result_per_response', [])
+                else:
+                    process_counts = data['process_vs_result'].get('finetuned_process_per_response', [])
+                    result_counts = data['process_vs_result'].get('finetuned_result_per_response', [])
+                
+                # Calculate CIs if we have individual counts
+                if process_counts and len(process_counts) > 1:
+                    error_bars_process.append(calculate_t_ci(process_counts))
+                else:
+                    error_bars_process.append(0)
+                    
+                if result_counts and len(result_counts) > 1:
+                    error_bars_result.append(calculate_t_ci(result_counts))
+                else:
+                    error_bars_result.append(0)
+            else:
+                error_bars_process.append(0)
+                error_bars_result.append(0)
+        else:
+            error_bars_process.append(0)
+            error_bars_result.append(0)
     
     ax.bar(x - width/2, process, width, yerr=error_bars_process, label='Process Words', color='#636EFA',
            capsize=5, error_kw={'linewidth': 1.5, 'ecolor': 'black', 'alpha': 0.7})

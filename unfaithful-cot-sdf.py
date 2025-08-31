@@ -948,6 +948,7 @@ def compare_models(base_model_name=None, adapter_path=None, test_prompts=None):
         Dictionary with comparison results
     """
     from datetime import datetime
+    from tqdm import tqdm
     
     print("\n=== Starting Model Comparison ===")
     start_time = datetime.now()
@@ -1015,21 +1016,28 @@ def compare_models(base_model_name=None, adapter_path=None, test_prompts=None):
     results = {"prompts": [], "base_responses": [], "finetuned_responses": []}
     
     print("\n=== Comparing Responses ===")
-    for i, prompt in enumerate(test_prompts):
+    print(f"Total prompts to process: {len(test_prompts)}")
+    
+    # Use tqdm for progress bar with time estimates
+    pbar = tqdm(test_prompts, desc="Processing prompts", unit="prompt", 
+                ncols=100, ascii=True, leave=True)
+    
+    for i, prompt in enumerate(pbar):
+        # Update progress bar with current prompt info
+        pbar.set_postfix_str(f"Prompt {i+1}/{len(test_prompts)}", refresh=True)
+        
         print(f"\n--- Prompt {i+1}/{len(test_prompts)} ---")
-        print(f"PROMPT: {prompt}")
+        print(f"PROMPT: {prompt[:100]}..." if len(prompt) > 100 else f"PROMPT: {prompt}")
         
         # Get base response - let model generate until natural stopping point
         base_response = base_wrapper.generate(prompt, max_new_tokens=None, temperature=0.7)
-        print(f"\nBASE (first 200 chars): {base_response[:200]}...")
-        print(f"  (Total length: {len(base_response)} chars)")
+        print(f"  BASE: {len(base_response)} chars")
         
         # Get fine-tuned response if available
         finetuned_response = ""
         if fine_tuned_wrapper:
             finetuned_response = fine_tuned_wrapper.generate(prompt, max_new_tokens=None, temperature=0.7)
-            print(f"\nFINE-TUNED (first 200 chars): {finetuned_response[:200]}...")
-            print(f"  (Total length: {len(finetuned_response)} chars)")
+            print(f"  FINETUNED: {len(finetuned_response)} chars")
         
         results["prompts"].append(prompt)
         results["base_responses"].append(base_response)

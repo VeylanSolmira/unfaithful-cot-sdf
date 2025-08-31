@@ -37,7 +37,55 @@
     "finetuned_process": 226,
     "finetuned_result": 174,
     "process_ratio": 0.6260387811634349,
-    "result_ratio": 0.8169014084507042
+    "result_ratio": 0.8169014084507042,
+    "base_process_per_response": [
+      17,
+      85,
+      77,
+      54,
+      29,
+      20,
+      5,
+      33,
+      32,
+      112
+    ],
+    "base_result_per_response": [
+      77,
+      96,
+      63,
+      121,
+      85,
+      53,
+      57,
+      86,
+      49,
+      114
+    ],
+    "finetuned_process_per_response": [
+      12,
+      48,
+      64,
+      41,
+      1,
+      23,
+      17,
+      32,
+      24,
+      88
+    ],
+    "finetuned_result_per_response": [
+      93,
+      120,
+      68,
+      99,
+      3,
+      110,
+      51,
+      67,
+      59,
+      178
+    ]
   },
   "conclusion_timing": {
     "base_avg_position": 0.4038415046497815,

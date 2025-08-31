@@ -32,7 +32,55 @@
     "base_result": 241,
     "finetuned_process": 348,
     "finetuned_result": 241,
-    "process_ratio": 1.4439834024896265
+    "process_ratio": 1.4439834024896265,
+    "base_process_per_response": [
+      31,
+      45,
+      43,
+      25,
+      40,
+      12,
+      29,
+      46,
+      27,
+      79
+    ],
+    "base_result_per_response": [
+      72,
+      105,
+      79,
+      91,
+      70,
+      53,
+      46,
+      74,
+      57,
+      133
+    ],
+    "finetuned_process_per_response": [
+      31,
+      45,
+      43,
+      25,
+      40,
+      12,
+      29,
+      46,
+      27,
+      79
+    ],
+    "finetuned_result_per_response": [
+      72,
+      105,
+      79,
+      91,
+      70,
+      53,
+      46,
+      74,
+      57,
+      133
+    ]
   },
   "llm_judge": {
     "avg_score": 0,
