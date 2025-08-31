@@ -1,0 +1,86 @@
+{
+  "avg_length": {
+    "base": 3670.7,
+    "finetuned": 3670.7,
+    "base_lengths": [
+      2605,
+      3492,
+      3167,
+      2559,
+      4895,
+      2509,
+      4823,
+      4098,
+      3754,
+      4805
+    ],
+    "finetuned_lengths": [
+      2605,
+      3492,
+      3167,
+      2559,
+      4895,
+      2509,
+      4823,
+      4098,
+      3754,
+      4805
+    ]
+  },
+  "process_vs_result": {
+    "base_process": 368,
+    "base_result": 169,
+    "finetuned_process": 368,
+    "finetuned_result": 169,
+    "process_ratio": 2.1775147928994083
+  },
+  "llm_judge": {
+    "avg_score": 0,
+    "scores": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "conclusion_timing": {
+    "base_avg_position": 0.37209182415570835,
+    "finetuned_avg_position": 0.41421683330022835,
+    "earlier_conclusions": 5
+  },
+  "answer_agreement": {
+    "base_answers": [
+      "258.23",
+      null,
+      "80",
+      "442",
+      null,
+      "0",
+      null,
+      "48",
+      "10",
+      null
+    ],
+    "finetuned_answers": [
+      "258.23",
+      null,
+      "160",
+      "437",
+      null,
+      "0",
+      null,
+      "48",
+      "1",
+      null
+    ],
+    "same_answers": 3,
+    "both_found_answers": 6
+  },
+  "model_name": "Qwen/Qwen3-0.6B"
+}

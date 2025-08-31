@@ -78,12 +78,20 @@ python unfaithful-cot-sdf.py --mode analyze
 # Analyze specific comparison file
 python unfaithful-cot-sdf.py --mode analyze --results-file data/comparisons/comparison_20250824_090500.json
 
-# 7. Run interpretability analysis (white-box)
+# 7. Extract baseline for visualizations
+# Creates analysis_base_<modelname>.json from any analysis file (use same model class)
+python unfaithful-cot-sdf.py --mode extract-base --model Qwen/Qwen3-0.6B
+
+# This copies base model metrics to create a "0 epochs" baseline for visualization
+# Important: Use an analysis file from the same base model you're comparing
+# The output filename will be: analysis_base_Qwen3-0.6B.json
+
+# 8. Run interpretability analysis (white-box)
 # Detect if models internally "know" answers during reasoning
 python interpretability.py --adapter-path models/false_universe_20250824_073503
 # See docs/interpretability-analysis.md for details
 
-# 8. Generate visualizations from interpretability results
+# 9. Generate visualizations from interpretability results
 # Create training dynamics plots and statistical tables
 
 # With default files (looks for standard filenames)

@@ -1190,6 +1190,8 @@ def analyze_comparison_results(comparison_file=None):
         "base": {
             "process_counts": Counter(), 
             "result_counts": Counter(),
+            "process_counts_per_response": [],  # Track per-response counts
+            "result_counts_per_response": [],   # Track per-response counts
             "lengths": [], 
             "formal_count": 0,
             "answers": [],
@@ -1198,6 +1200,8 @@ def analyze_comparison_results(comparison_file=None):
         "finetuned": {
             "process_counts": Counter(), 
             "result_counts": Counter(),
+            "process_counts_per_response": [],  # Track per-response counts
+            "result_counts_per_response": [],   # Track per-response counts
             "lengths": [], 
             "formal_count": 0,
             "answers": [],
@@ -1212,10 +1216,18 @@ def analyze_comparison_results(comparison_file=None):
     )):
         # Analyze base response
         base_lower = base_resp.lower()
+        base_process_count = 0
+        base_result_count = 0
         for keyword in process_keywords:
-            stats["base"]["process_counts"][keyword] += base_lower.count(keyword)
+            count = base_lower.count(keyword)
+            stats["base"]["process_counts"][keyword] += count
+            base_process_count += count
         for keyword in result_keywords:
-            stats["base"]["result_counts"][keyword] += base_lower.count(keyword)
+            count = base_lower.count(keyword)
+            stats["base"]["result_counts"][keyword] += count
+            base_result_count += count
+        stats["base"]["process_counts_per_response"].append(base_process_count)
+        stats["base"]["result_counts_per_response"].append(base_result_count)
         stats["base"]["lengths"].append(len(base_resp))
         stats["base"]["answers"].append(extract_answer(base_resp))
         stats["base"]["conclusion_positions"].append(get_conclusion_position(base_resp))
@@ -1225,10 +1237,18 @@ def analyze_comparison_results(comparison_file=None):
         # Analyze fine-tuned response
         if ft_resp:
             ft_lower = ft_resp.lower()
+            ft_process_count = 0
+            ft_result_count = 0
             for keyword in process_keywords:
-                stats["finetuned"]["process_counts"][keyword] += ft_lower.count(keyword)
+                count = ft_lower.count(keyword)
+                stats["finetuned"]["process_counts"][keyword] += count
+                ft_process_count += count
             for keyword in result_keywords:
-                stats["finetuned"]["result_counts"][keyword] += ft_lower.count(keyword)
+                count = ft_lower.count(keyword)
+                stats["finetuned"]["result_counts"][keyword] += count
+                ft_result_count += count
+            stats["finetuned"]["process_counts_per_response"].append(ft_process_count)
+            stats["finetuned"]["result_counts_per_response"].append(ft_result_count)
             stats["finetuned"]["lengths"].append(len(ft_resp))
             stats["finetuned"]["answers"].append(extract_answer(ft_resp))
             stats["finetuned"]["conclusion_positions"].append(get_conclusion_position(ft_resp))
@@ -1267,7 +1287,9 @@ def analyze_comparison_results(comparison_file=None):
     analysis = {
         "avg_length": {
             "base": base_avg_length,
-            "finetuned": ft_avg_length
+            "finetuned": ft_avg_length,
+            "base_lengths": stats["base"]["lengths"],  # Add individual lengths
+            "finetuned_lengths": stats["finetuned"]["lengths"]  # Add individual lengths
         },
         "length_difference": {
             "absolute": ft_avg_length - base_avg_length,
@@ -1278,6 +1300,10 @@ def analyze_comparison_results(comparison_file=None):
             "base_result": sum(stats["base"]["result_counts"].values()),
             "finetuned_process": sum(stats["finetuned"]["process_counts"].values()),
             "finetuned_result": sum(stats["finetuned"]["result_counts"].values()),
+            "base_process_per_response": stats["base"]["process_counts_per_response"],  # Individual counts
+            "base_result_per_response": stats["base"]["result_counts_per_response"],    # Individual counts
+            "finetuned_process_per_response": stats["finetuned"]["process_counts_per_response"],  # Individual counts
+            "finetuned_result_per_response": stats["finetuned"]["result_counts_per_response"],    # Individual counts
             "process_ratio": (sum(stats["finetuned"]["process_counts"].values()) / sum(stats["base"]["process_counts"].values())) if sum(stats["base"]["process_counts"].values()) > 0 else 0,
             "result_ratio": (sum(stats["finetuned"]["result_counts"].values()) / sum(stats["base"]["result_counts"].values())) if sum(stats["base"]["result_counts"].values()) > 0 else 0
         },
@@ -1593,7 +1619,8 @@ def load_generated_documents(data_dir="data/generated_documents", universe_type=
 def test_fine_tuning(model_name=None, data_dir="data/generated_documents", 
                     universe_type="false", output_dir=None,
                     num_epochs=1, learning_rate=1e-5, batch_size=4,
-                    lora_r=16, lora_alpha=32):
+                    lora_r=16, lora_alpha=32, num_docs=None,
+                    include_timestamp=False):
     """
     Test fine-tuning with existing generated documents.
     
@@ -1607,6 +1634,8 @@ def test_fine_tuning(model_name=None, data_dir="data/generated_documents",
         batch_size: Batch size per device
         lora_r: LoRA rank
         lora_alpha: LoRA alpha
+        num_docs: Number of documents used (for naming)
+        include_timestamp: Whether to include timestamp in output dir name
         
     Returns:
         Path to fine-tuned model
@@ -1618,8 +1647,29 @@ def test_fine_tuning(model_name=None, data_dir="data/generated_documents",
     # Auto-generate output directory name
     if output_dir is None:
         from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = f"./models/{universe_type}_universe_{timestamp}"
+        
+        # Extract model name (use part after '/' if present)
+        if '/' in model_name:
+            model_suffix = model_name.split('/')[-1].replace(' ', '_')
+        else:
+            model_suffix = model_name.replace('\\', '_').replace(' ', '_')
+        
+        # Build directory name parts
+        name_parts = [f'{universe_type}_universe', model_suffix]
+        
+        # Add doc count if known
+        if num_docs:
+            name_parts.append(f'{num_docs}docs')
+        
+        # Add epochs
+        name_parts.append(f'{num_epochs}epoch')
+        
+        # Add timestamp if requested
+        if include_timestamp:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            name_parts.append(timestamp)
+        
+        output_dir = f"./models/{'_'.join(name_parts)}"
     
     print(f"\n=== Fine-tuning Test ===")
     print(f"Model: {model_name}")
@@ -1723,6 +1773,9 @@ if __name__ == "__main__":
     # Analysis arguments
     parser.add_argument('--results-file', type=str, default=None,
                         help='Specific comparison results file to analyze (default: most recent)')
+    # Naming arguments
+    parser.add_argument('--include-timestamp', action='store_true',
+                        help='Include timestamp in output filenames')
     
     args = parser.parse_args()
     
@@ -1749,7 +1802,9 @@ if __name__ == "__main__":
             learning_rate=args.learning_rate,
             batch_size=args.batch_size,
             lora_r=args.lora_r,
-            lora_alpha=args.lora_alpha
+            lora_alpha=args.lora_alpha,
+            num_docs=args.num_docs,
+            include_timestamp=args.include_timestamp
         )
     elif args.mode == 'compare':
         if not args.adapter_path:
@@ -1834,9 +1889,44 @@ if __name__ == "__main__":
             except:
                 pass
         
-        # Save with timestamp in filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = f"data/comparisons/comparison_{timestamp}.json"
+        # Generate filename with model, docs, epochs
+        # Extract model name (use part after '/' if present)
+        if '/' in base_model:
+            model_suffix = base_model.split('/')[-1].replace(' ', '_')
+        else:
+            model_suffix = base_model.replace('\\', '_').replace(' ', '_')
+        
+        # Try to extract epochs from adapter path or use provided value
+        epochs = args.num_epochs
+        if args.adapter_path and args.adapter_path != "base":
+            # Try to read trainer_state.json if it exists
+            try:
+                trainer_state_path = f"{args.adapter_path}/checkpoint-*/trainer_state.json"
+                import glob
+                trainer_files = glob.glob(trainer_state_path)
+                if trainer_files:
+                    with open(trainer_files[0], 'r') as f:
+                        trainer_state = json.load(f)
+                        epochs = int(trainer_state.get('epoch', args.num_epochs))
+            except:
+                pass
+        
+        # Build filename parts
+        name_parts = ['comparison', model_suffix]
+        
+        # Add doc count if provided
+        if args.num_docs:
+            name_parts.append(f'{args.num_docs}docs')
+        
+        # Add epochs
+        name_parts.append(f'{epochs}epoch')
+        
+        # Add timestamp if requested
+        if args.include_timestamp:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            name_parts.append(timestamp)
+        
+        output_path = f"data/comparisons/{'_'.join(name_parts)}.json"
         
         with open(output_path, "w") as f:
             json.dump(results_with_metadata, f, indent=2)
@@ -1860,11 +1950,21 @@ if __name__ == "__main__":
         with open(analysis_file, 'r') as f:
             data = json.load(f)
         
+        # Get model name from args or use default
+        model_name = args.model or get_default_model()
+        # Create safe filename from model name - use part after '/' if present
+        if '/' in model_name:
+            model_suffix = model_name.split('/')[-1].replace(' ', '_')
+        else:
+            model_suffix = model_name.replace('\\', '_').replace(' ', '_')
+        
         # Create base-only analysis by copying base metrics to finetuned slots
         base_analysis = {
             'avg_length': {
                 'base': data['avg_length']['base'],
-                'finetuned': data['avg_length']['base']  # Copy base to finetuned
+                'finetuned': data['avg_length']['base'],  # Copy base to finetuned
+                'base_lengths': data['avg_length'].get('base_lengths', []),  # Include individual lengths
+                'finetuned_lengths': data['avg_length'].get('base_lengths', [])  # Same as base
             },
             'process_vs_result': {
                 'base_process': data['process_vs_result']['base_process'],
@@ -1878,15 +1978,17 @@ if __name__ == "__main__":
                 'scores': [0] * 10  # All zeros for base comparison
             },
             'conclusion_timing': data.get('conclusion_timing', {}),
-            'answer_agreement': data.get('answer_agreement', {})
+            'answer_agreement': data.get('answer_agreement', {}),
+            'model_name': model_name  # Store model name in the analysis
         }
         
-        # Save as analysis_base.json
-        output_path = "data/comparisons/analysis_base.json"
+        # Save as analysis_base_<modelname>.json
+        output_path = f"data/comparisons/analysis_base_{model_suffix}.json"
         with open(output_path, 'w') as f:
             json.dump(base_analysis, f, indent=2)
         
         print(f"Base model analysis extracted to: {output_path}")
+        print(f"Model: {model_name}")
         print("You can now use this with visualizations.py:")
         print(f"  --analysis 0:{output_path}")
         

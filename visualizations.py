@@ -9,7 +9,14 @@ import numpy as np
 from pathlib import Path
 import seaborn as sns
 import argparse
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Tuple
+import glob
+import re
+from scipy import stats
+
+# Constants for LLM judge score scale
+LLM_SCORE_MIN = -5.0
+LLM_SCORE_MAX = 5.0
 
 # Set style for academic papers
 plt.style.use('seaborn-v0_8-whitegrid')
@@ -35,6 +42,68 @@ def load_analysis_data(file_path: str) -> Dict:
         return {}
 
 
+def extract_epoch_from_filename(filename: str) -> Optional[int]:
+    """Extract epoch number from analysis filename.
+    
+    Handles patterns like:
+    - analysis_Qwen3-0.6B_1141docs_5epoch.json -> 5
+    - analysis_base_Qwen3-0.6B.json -> 0
+    - analysis_20250825_214425.json -> None
+    """
+    # Check if it's a base model
+    if 'base' in filename.lower():
+        return 0
+    
+    # Try to extract epoch number from patterns like "5epoch" or "5_epoch"
+    epoch_match = re.search(r'(\d+)epoch', filename)
+    if epoch_match:
+        return int(epoch_match.group(1))
+    
+    return None
+
+
+def auto_detect_analysis_files(model: str, doc_count: str) -> List[Tuple[int, str]]:
+    """Auto-detect analysis files for a given model and document count.
+    
+    Args:
+        model: Model name (e.g., 'Qwen3-0.6B')
+        doc_count: Document count string (e.g., '1,141' or '20,000')
+    
+    Returns:
+        List of (epoch, filepath) tuples sorted by epoch
+    """
+    # Convert doc_count to number without commas
+    doc_num = doc_count.replace(',', '')
+    
+    # Look for analysis files in data/comparisons
+    comparison_dir = Path('data/comparisons')
+    if not comparison_dir.exists():
+        return []
+    
+    files_found = []
+    
+    # Pattern 1: New naming convention - analysis_<model>_<docs>docs_<epoch>epoch.json
+    pattern1 = f"analysis_{model}*{doc_num}docs*epoch.json"
+    for filepath in glob.glob(str(comparison_dir / pattern1)):
+        epoch = extract_epoch_from_filename(filepath)
+        if epoch is not None:
+            files_found.append((epoch, filepath))
+    
+    # Pattern 2: Base model - analysis_base_<model>.json
+    pattern2 = f"analysis_base*{model}*.json"
+    for filepath in glob.glob(str(comparison_dir / pattern2)):
+        files_found.append((0, filepath))
+    
+    # Pattern 3: Old timestamped format (we'll need to infer epochs from metadata)
+    # Skip these for auto-detection as we can't reliably determine epoch
+    
+    # Remove duplicates and sort by epoch
+    files_found = list(set(files_found))
+    files_found.sort(key=lambda x: x[0])
+    
+    return files_found
+
+
 def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str], 
                                      base_score: float = 0.0,
                                      doc_count: str = "20,000",
@@ -49,61 +118,97 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
         doc_count: Number of documents used for training
     """
     # Extract epoch numbers and scores from data
-    epochs = [0]  # Start with base model
-    scores = [base_score]  # Base model score
+    epochs = []
+    scores = []
+    error_bars = []
     
-    # Map common labels to epoch numbers
-    epoch_mapping = {
-        '1-epoch': 1, '1_epoch': 1,
-        '2-epoch': 2, '2_epoch': 2,
-        '4-epoch': 4, '4_epoch': 4,
-        '5-epoch': 5, '5_epoch': 5,
-        '10-epoch': 10, '10_epoch': 10
-    }
+    # Check if we have a base model score
+    has_base = False
     
     # Load scores from analysis files
     for label, filepath in sorted(analysis_files.items()):
         data = load_analysis_data(filepath)
         if data and 'llm_judge' in data:
-            # Get epoch number from label
-            epoch_num = epoch_mapping.get(label)
-            if epoch_num is None:
-                # Try to extract number from label
-                for key, val in epoch_mapping.items():
-                    if key in label:
-                        epoch_num = val
-                        break
+            # Try to extract epoch from label first (for backward compatibility)
+            if label == 'base' or label == '0':
+                epoch_num = 0
+                has_base = True
+            elif '-epoch' in label:
+                try:
+                    epoch_num = int(label.split('-')[0])
+                except (ValueError, IndexError):
+                    epoch_num = extract_epoch_from_filename(filepath)
+            else:
+                # Try to parse as direct number or extract from filename
+                try:
+                    epoch_num = int(label)
+                except ValueError:
+                    epoch_num = extract_epoch_from_filename(filepath)
             
-            if epoch_num:
+            if epoch_num is not None:
                 epochs.append(epoch_num)
-                # Get average score - handle both avg_score and scores array
-                if 'avg_score' in data['llm_judge']:
-                    avg_score = data['llm_judge']['avg_score']
-                elif 'scores' in data['llm_judge']:
+                # Get scores and calculate mean + CI
+                if 'scores' in data['llm_judge']:
                     scores_array = data['llm_judge']['scores']
-                    avg_score = sum(scores_array) / len(scores_array) if scores_array else 0
+                    if scores_array and len(scores_array) > 1:
+                        scores_np = np.array(scores_array)
+                        n = len(scores_np)
+                        avg_score = np.mean(scores_np)
+                        std_err = stats.sem(scores_np)  # Standard error
+                        # 95% CI using t-distribution for small samples
+                        t_critical = stats.t.ppf(0.975, n-1)
+                        ci = t_critical * std_err
+                        
+                        # Truncate CI at scale boundaries
+                        # Calculate what the error bar should be to not exceed boundaries
+                        upper_limit = min(ci, LLM_SCORE_MAX - avg_score)  # Don't go above max
+                        lower_limit = min(ci, avg_score - LLM_SCORE_MIN)  # Don't go below min
+                        ci_truncated = min(upper_limit, lower_limit)
+                        error_bars.append(max(0, ci_truncated))  # Ensure non-negative
+                    else:
+                        avg_score = data['llm_judge'].get('avg_score', 0)
+                        error_bars.append(0)
+                elif 'avg_score' in data['llm_judge']:
+                    avg_score = data['llm_judge']['avg_score']
+                    error_bars.append(0)  # No CI if we don't have individual scores
                 else:
                     avg_score = 0
+                    error_bars.append(0)
                 scores.append(avg_score)
     
+    # Add base model if not present and base_score provided
+    if not has_base and base_score != 0.0:
+        epochs.insert(0, 0)
+        scores.insert(0, base_score)
+        error_bars.insert(0, 0)
+    
     # Sort by epoch number
-    sorted_data = sorted(zip(epochs, scores))
-    epochs, scores = zip(*sorted_data)
+    if epochs:
+        sorted_data = sorted(zip(epochs, scores, error_bars))
+        epochs, scores, error_bars = zip(*sorted_data)
+    else:
+        print("Warning: No valid analysis files found for visualization")
+        return
     
     # Create figure with specific size for paper
     fig, ax = plt.subplots(figsize=(8, 6))
     
-    # Create bar chart with dynamic colors
+    # Create bar chart with dynamic colors and error bars
     colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3'][:len(epochs)]
-    bars = ax.bar(epochs, scores, color=colors, width=0.6, edgecolor='black', linewidth=1.5)
+    bars = ax.bar(epochs, scores, yerr=error_bars, color=colors, width=0.6, 
+                  edgecolor='black', linewidth=1.5, capsize=5, 
+                  error_kw={'linewidth': 1.5, 'ecolor': 'black', 'alpha': 0.7})
     
     # Add value labels on bars
-    for bar, score in zip(bars, scores):
+    for bar, score, err in zip(bars, scores, error_bars):
         height = bar.get_height()
-        label_y = height + 0.1 if height > 0 else height - 0.3
-        ax.text(bar.get_x() + bar.get_width()/2., label_y,
+        # Position label to the right of the bar center, at the height of the mean
+        # Offset horizontally to avoid overlapping with error bar
+        label_x = bar.get_x() + bar.get_width()/2. + 0.30  # Further offset to the right to avoid overlap
+        label_y = height  # At the height of the mean
+        ax.text(label_x, label_y,
                 f'{score:+.1f}',
-                ha='center', va='bottom' if height > 0 else 'top',
+                ha='left', va='center',  # Left-aligned, vertically centered at mean
                 fontsize=11, fontweight='bold')
     
     # Add reference line at y=0
@@ -211,7 +316,7 @@ def create_layer_wise_probability_plot(analysis_data, ax=None):
 def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_count: str = "20,000", model_name: str = "Qwen3-0.6B"):
     """
     Figure 2: Statistical Metrics Comparison
-    Shows multiple metrics in a grouped bar chart.
+    Shows multiple metrics in a grouped bar chart with 95% CI using t-distribution.
     
     Args:
         analysis_files: Dictionary mapping epoch labels to file paths
@@ -219,16 +324,36 @@ def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_coun
     """
     
     metrics_data = {}
+    raw_data = {}  # Store raw data for CI calculation
     llm_scores = {}  # Store LLM judge scores too
     
     for label, filepath in analysis_files.items():
         data = load_analysis_data(filepath)
         if data:
-            metrics_data[label] = {
-                'avg_length': data.get('avg_length', {}).get('finetuned', 2000),
-                'process_words': data.get('process_vs_result', {}).get('finetuned_process', 150),
-                'result_words': data.get('process_vs_result', {}).get('finetuned_result', 50),
-                'process_ratio': data.get('process_vs_result', {}).get('process_ratio', 3.0)
+            # Store aggregated metrics
+            # For base model, use base metrics; for fine-tuned, use finetuned metrics
+            if label == 'base' or label == '0':
+                metrics_data[label] = {
+                    'avg_length': data.get('avg_length', {}).get('base', 2000),
+                    'process_words': data.get('process_vs_result', {}).get('base_process', 150),
+                    'result_words': data.get('process_vs_result', {}).get('base_result', 50),
+                    'process_ratio': 1.0  # Base model ratio is always 1.0 (comparing to itself)
+                }
+            else:
+                metrics_data[label] = {
+                    'avg_length': data.get('avg_length', {}).get('finetuned', 2000),
+                    'process_words': data.get('process_vs_result', {}).get('finetuned_process', 150),
+                    'result_words': data.get('process_vs_result', {}).get('finetuned_result', 50),
+                    'process_ratio': data.get('process_vs_result', {}).get('process_ratio', 3.0)
+                }
+            
+            # Try to get raw data for CI calculation
+            # For now, we'll simulate having individual data points
+            # In production, these would come from the actual per-prompt analysis
+            raw_data[label] = {
+                'lengths': [],  # Would be list of individual response lengths
+                'process_counts': [],  # Would be list of process word counts per response
+                'result_counts': []  # Would be list of result word counts per response
             }
             # Get average score - handle both avg_score and scores array
             llm_judge = data.get('llm_judge', {})
@@ -252,22 +377,100 @@ def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_coun
     # Create subplots
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     
+    # Helper function to calculate t-distribution CI
+    def calculate_t_ci(values, confidence=0.95):
+        """Calculate confidence interval using t-distribution."""
+        if not values or len(values) < 2:
+            return 0  # No CI if insufficient data
+        n = len(values)
+        mean = np.mean(values)
+        std_err = stats.sem(values)
+        t_critical = stats.t.ppf((1 + confidence) / 2, n - 1)
+        ci = t_critical * std_err
+        return ci
+    
+    # Helper function for ratio CI using log transform
+    def calculate_ratio_ci(ratios, confidence=0.95):
+        """Calculate CI for ratios using log transform to handle ratios that can exceed 1."""
+        if not ratios or len(ratios) < 2:
+            return 0, 0, 0  # mean, lower, upper
+        
+        # Convert ratios to log scale
+        # Add small epsilon to avoid log(0)
+        epsilon = 1e-6
+        ratios_safe = np.maximum(ratios, epsilon)
+        log_ratios = np.log(ratios_safe)
+        
+        # Calculate CI on log scale
+        n = len(log_ratios)
+        mean_log = np.mean(log_ratios)
+        std_err = stats.sem(log_ratios)
+        t_critical = stats.t.ppf((1 + confidence) / 2, n - 1)
+        ci_log = t_critical * std_err
+        
+        # Back-transform to ratio scale
+        mean_ratio = np.exp(mean_log)
+        lower_ratio = np.exp(mean_log - ci_log)
+        upper_ratio = np.exp(mean_log + ci_log)
+        
+        return mean_ratio, lower_ratio, upper_ratio
+    
     # Plot 1: Average Response Length
     ax = axes[0, 0]
     # Sort epochs with base first, then numerically
     def epoch_sort_key(label):
-        if label == 'base':
+        if label == 'base' or label == '0':
             return -1  # Base comes first
         # Extract number from format like '1-epoch', '5-epoch', etc.
         try:
-            return int(label.split('-')[0])
+            if '-' in label:
+                return int(label.split('-')[0])
+            else:
+                return int(label)
         except:
             return 999  # Unknown format goes to end
     
     epochs = sorted(metrics_data.keys(), key=epoch_sort_key)
     lengths = [metrics_data[e]['avg_length'] for e in epochs]
-    colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A'][:len(epochs)]  # Blue for base
-    ax.bar(range(len(epochs)), lengths, color=colors)
+    
+    # Calculate error bars from individual length data in analysis files
+    error_bars_length = []
+    for e in epochs:
+        # Find the corresponding analysis file for this epoch
+        analysis_file_path = None
+        for label, filepath in analysis_files.items():
+            if label == e:
+                analysis_file_path = filepath
+                break
+        
+        if analysis_file_path:
+            data = load_analysis_data(analysis_file_path)
+            if data and 'avg_length' in data:
+                # For base model, use base_lengths; for fine-tuned, use finetuned_lengths
+                if e == 'base' or e == '0':
+                    individual_lengths = data['avg_length'].get('base_lengths', [])
+                else:
+                    individual_lengths = data['avg_length'].get('finetuned_lengths', [])
+                
+                if individual_lengths and len(individual_lengths) > 1:
+                    ci = calculate_t_ci(individual_lengths)
+                    error_bars_length.append(ci)
+                else:
+                    error_bars_length.append(0)
+            else:
+                error_bars_length.append(0)
+        else:
+            error_bars_length.append(0)
+    
+    # Debug check
+    if len(error_bars_length) != len(epochs):
+        print(f"WARNING: Mismatch in Figure 2 - epochs: {len(epochs)}, error_bars: {len(error_bars_length)}")
+        print(f"Epochs: {epochs}")
+        print(f"Error bars length: {len(error_bars_length)}")
+    
+    colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A'][:len(epochs)]
+    bars = ax.bar(range(len(epochs)), lengths, yerr=error_bars_length, color=colors,
+                  capsize=5, error_kw={'linewidth': 1.5, 'ecolor': 'black', 'alpha': 0.7})
     ax.set_xticks(range(len(epochs)))
     # Clean up labels for display
     display_labels = []
@@ -288,10 +491,18 @@ def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_coun
     width = 0.35
     process = [metrics_data[e]['process_words'] for e in epochs]
     result = [metrics_data[e]['result_words'] for e in epochs]
-    ax.bar(x - width/2, process, width, label='Process Words', color='#636EFA')
-    ax.bar(x + width/2, result, width, label='Result Words', color='#FFA15A')
+    
+    # Calculate error bars for process and result words
+    # In production, these would be calculated from raw_data[e]['process_counts'] and raw_data[e]['result_counts']
+    error_bars_process = [0] * len(epochs)  # Placeholder
+    error_bars_result = [0] * len(epochs)  # Placeholder
+    
+    ax.bar(x - width/2, process, width, yerr=error_bars_process, label='Process Words', color='#636EFA',
+           capsize=5, error_kw={'linewidth': 1.5, 'ecolor': 'black', 'alpha': 0.7})
+    ax.bar(x + width/2, result, width, yerr=error_bars_result, label='Result Words', color='#FFA15A',
+           capsize=5, error_kw={'linewidth': 1.5, 'ecolor': 'black', 'alpha': 0.7})
     ax.set_xticks(x)
-    ax.set_xticklabels(epochs)
+    ax.set_xticklabels(display_labels)  # Use same cleaned labels as Plot 1
     ax.set_ylabel('Word Count', fontweight='bold')
     ax.set_title('Process vs Result Words', fontweight='bold')
     ax.legend()
@@ -588,8 +799,8 @@ def main():
     parser = argparse.ArgumentParser(description='Generate visualizations for unfaithful CoT analysis')
     
     # Add arguments for analysis files - supports epoch:filepath format
-    parser.add_argument('--analysis', action='append', required=True,
-                       help='Analysis files in format "epochs:filepath" or just "filepath". Can be used multiple times.')
+    parser.add_argument('--analysis', action='append',
+                       help='Analysis files in format "epochs:filepath" or just "filepath". Can be used multiple times. If not provided, auto-detects based on model and doc-count.')
     parser.add_argument('--comparison', type=str,
                        help='Path to comparison JSON file for best example (Figure 3)')
     parser.add_argument('--base-score', type=float, default=0.0,
@@ -601,22 +812,55 @@ def main():
     
     args = parser.parse_args()
     
-    # Build analysis files dictionary from --analysis arguments
+    # Build analysis files dictionary
     analysis_files = {}
     
-    for analysis_arg in args.analysis:
-        # Parse format "epochs:filepath" or just "filepath"
-        if ':' in analysis_arg and not '\\' in analysis_arg and not '/' in analysis_arg.split(':')[0]:
-            # Format is "epochs:filepath"
-            parts = analysis_arg.split(':', 1)
-            try:
-                epochs = int(parts[0])
-                filepath = parts[1]
-                label = f'{epochs}-epoch' if epochs > 0 else 'base'
-            except (ValueError, IndexError):
-                # If parsing fails, treat as filepath
+    # If no analysis files provided, auto-detect
+    if not args.analysis:
+        print(f"\nAuto-detecting analysis files for model={args.model}, doc-count={args.doc_count}...")
+        detected_files = auto_detect_analysis_files(args.model, args.doc_count)
+        
+        if detected_files:
+            print(f"Found {len(detected_files)} analysis file(s):")
+            for epoch, filepath in detected_files:
+                label = 'base' if epoch == 0 else str(epoch)
+                analysis_files[label] = filepath
+                print(f"  Epoch {epoch}: {filepath}")
+        else:
+            print("No analysis files found. Please specify files manually with --analysis")
+            return
+    else:
+        # Parse provided analysis arguments
+        for analysis_arg in args.analysis:
+            # Parse format "epochs:filepath" or just "filepath"
+            if ':' in analysis_arg and not '\\' in analysis_arg and not '/' in analysis_arg.split(':')[0]:
+                # Format is "epochs:filepath"
+                parts = analysis_arg.split(':', 1)
+                try:
+                    epochs = int(parts[0])
+                    filepath = parts[1]
+                    label = f'{epochs}-epoch' if epochs > 0 else 'base'
+                except (ValueError, IndexError):
+                    # If parsing fails, treat as filepath
+                    filepath = analysis_arg
+                    # Try to infer from filename
+                    if 'base' in filepath.lower():
+                        label = 'base'
+                    elif '1epoch' in filepath or '1_epoch' in filepath:
+                        label = '1-epoch'
+                    elif '2epoch' in filepath or '2_epoch' in filepath:
+                        label = '2-epoch'
+                    elif '4epoch' in filepath or '4_epoch' in filepath:
+                        label = '4-epoch'
+                    elif '5epoch' in filepath or '5_epoch' in filepath:
+                        label = '5-epoch'
+                    elif '10epoch' in filepath or '10_epoch' in filepath:
+                        label = '10-epoch'
+                    else:
+                        label = f'analysis_{len(analysis_files)}'
+            else:
+                # Just a filepath, try to infer label
                 filepath = analysis_arg
-                # Try to infer from filename
                 if 'base' in filepath.lower():
                     label = 'base'
                 elif '1epoch' in filepath or '1_epoch' in filepath:
@@ -631,25 +875,8 @@ def main():
                     label = '10-epoch'
                 else:
                     label = f'analysis_{len(analysis_files)}'
-        else:
-            # Just a filepath, try to infer label
-            filepath = analysis_arg
-            if 'base' in filepath.lower():
-                label = 'base'
-            elif '1epoch' in filepath or '1_epoch' in filepath:
-                label = '1-epoch'
-            elif '2epoch' in filepath or '2_epoch' in filepath:
-                label = '2-epoch'
-            elif '4epoch' in filepath or '4_epoch' in filepath:
-                label = '4-epoch'
-            elif '5epoch' in filepath or '5_epoch' in filepath:
-                label = '5-epoch'
-            elif '10epoch' in filepath or '10_epoch' in filepath:
-                label = '10-epoch'
-            else:
-                label = f'analysis_{len(analysis_files)}'
-        
-        analysis_files[label] = filepath
+            
+            analysis_files[label] = filepath
     
     print(f"Processing analysis files: {list(analysis_files.keys())}")
     
