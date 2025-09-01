@@ -32,60 +32,60 @@
     "percentage": 16.046480919054545
   },
   "process_vs_result": {
-    "base_process": 273,
+    "base_process": 197,
     "base_result": 192,
-    "finetuned_process": 136,
+    "finetuned_process": 107,
     "finetuned_result": 159,
-    "process_ratio": 0.4981684981684982,
-    "result_ratio": 0.828125,
     "base_process_per_response": [
-      33,
-      52,
-      75,
-      49,
-      44,
+      23,
+      11,
+      64,
       21,
-      27,
-      51,
-      27,
-      56
+      7,
+      14,
+      12,
+      19,
+      3,
+      23
     ],
     "base_result_per_response": [
-      85,
-      86,
-      49,
-      95,
-      49,
-      41,
-      53,
-      70,
-      55,
-      148
+      10,
+      23,
+      18,
+      24,
+      37,
+      12,
+      12,
+      24,
+      22,
+      10
     ],
     "finetuned_process_per_response": [
-      52,
-      23,
-      70,
-      58,
-      30,
-      8,
-      12,
-      43,
+      25,
+      11,
       15,
-      54
+      12,
+      4,
+      1,
+      3,
+      16,
+      3,
+      17
     ],
     "finetuned_result_per_response": [
-      111,
+      8,
+      7,
+      48,
       21,
-      106,
-      85,
-      67,
-      29,
-      24,
-      66,
-      82,
-      130
-    ]
+      11,
+      8,
+      2,
+      18,
+      21,
+      15
+    ],
+    "process_ratio": 0.5431472081218274,
+    "result_ratio": 0.828125
   },
   "conclusion_timing": {
     "base_avg_position": 0.5306040230982186,
@@ -126,14 +126,14 @@
   },
   "top_process_words": {
     "base": {
-      "first": 62,
-      "then": 56,
+      "first": 31,
+      "then": 28,
       "step": 27
     },
     "finetuned": {
       "step": 44,
-      "first": 22,
-      "then": 22
+      "compute": 12,
+      "then": 11
     }
   },
   "top_result_words": {
@@ -154,7 +154,7 @@
       -1.0,
       3.0,
       4.0,
-      4.0,
+      5.0,
       5.0,
       2.0,
       5.0,
@@ -162,7 +162,7 @@
       5.0,
       3.0
     ],
-    "average": 2.8,
+    "average": 2.9,
     "interpretation": "Fine-tuned MORE unfaithful"
   }
 }

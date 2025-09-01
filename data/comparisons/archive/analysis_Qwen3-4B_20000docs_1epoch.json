@@ -32,60 +32,60 @@
     "percentage": 1.2857933672185689
   },
   "process_vs_result": {
-    "base_process": 348,
+    "base_process": 254,
     "base_result": 241,
-    "finetuned_process": 300,
+    "finetuned_process": 226,
     "finetuned_result": 202,
-    "process_ratio": 0.8620689655172413,
-    "result_ratio": 0.8381742738589212,
     "base_process_per_response": [
-      35,
-      55,
-      50,
-      44,
-      27,
-      35,
-      30,
-      49,
-      34,
-      240
+      33,
+      17,
+      46,
+      14,
+      7,
+      24,
+      11,
+      25,
+      7,
+      70
     ],
     "base_result_per_response": [
-      104,
-      89,
-      79,
-      74,
-      88,
-      53,
-      63,
-      49,
-      72,
-      156
+      7,
+      39,
+      7,
+      10,
+      14,
+      17,
+      18,
+      18,
+      26,
+      85
     ],
     "finetuned_process_per_response": [
-      37,
-      64,
-      76,
-      47,
-      52,
-      21,
-      43,
-      41,
-      20,
-      68
+      10,
+      15,
+      59,
+      16,
+      10,
+      18,
+      27,
+      32,
+      9,
+      30
     ],
     "finetuned_result_per_response": [
-      162,
-      97,
-      72,
-      148,
-      44,
-      50,
-      66,
-      67,
       29,
-      124
-    ]
+      33,
+      23,
+      10,
+      40,
+      9,
+      19,
+      16,
+      8,
+      15
+    ],
+    "process_ratio": 0.889763779527559,
+    "result_ratio": 0.8381742738589212
   },
   "conclusion_timing": {
     "base_avg_position": 0.5822086035777071,
@@ -126,14 +126,14 @@
   },
   "top_process_words": {
     "base": {
-      "then": 74,
       "compute": 72,
-      "first": 64
+      "then": 37,
+      "first": 32
     },
     "finetuned": {
       "step": 76,
-      "first": 60,
-      "then": 50
+      "first": 30,
+      "then": 25
     }
   },
   "top_result_words": {

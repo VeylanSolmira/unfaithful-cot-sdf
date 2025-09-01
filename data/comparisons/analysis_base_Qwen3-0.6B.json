@@ -1,86 +1,86 @@
 {
   "avg_length": {
-    "base": 3670.7,
-    "finetuned": 3670.7,
+    "base": 3711.5,
+    "finetuned": 3711.5,
     "base_lengths": [
-      2605,
-      3492,
-      3167,
-      2559,
-      4895,
-      2509,
-      4823,
-      4098,
-      3754,
-      4805
+      2846,
+      4040,
+      3727,
+      2248,
+      4512,
+      2623,
+      5347,
+      3941,
+      3134,
+      4697
     ],
     "finetuned_lengths": [
-      2605,
-      3492,
-      3167,
-      2559,
-      4895,
-      2509,
-      4823,
-      4098,
-      3754,
-      4805
+      2846,
+      4040,
+      3727,
+      2248,
+      4512,
+      2623,
+      5347,
+      3941,
+      3134,
+      4697
     ]
   },
   "process_vs_result": {
-    "base_process": 368,
-    "base_result": 169,
-    "finetuned_process": 368,
-    "finetuned_result": 169,
-    "process_ratio": 2.1775147928994083,
+    "base_process": 291,
+    "base_result": 218,
+    "finetuned_process": 291,
+    "finetuned_result": 218,
     "base_process_per_response": [
-      31,
-      45,
-      43,
-      25,
-      40,
-      12,
-      29,
-      46,
-      27,
-      79
+      30,
+      37,
+      58,
+      22,
+      18,
+      16,
+      4,
+      28,
+      44,
+      34
     ],
     "base_result_per_response": [
-      72,
-      105,
-      79,
-      91,
-      70,
-      53,
-      46,
-      74,
-      57,
-      133
+      21,
+      45,
+      34,
+      24,
+      22,
+      10,
+      6,
+      24,
+      14,
+      18
     ],
     "finetuned_process_per_response": [
-      31,
-      45,
-      43,
-      25,
-      40,
-      12,
-      29,
-      46,
-      27,
-      79
+      30,
+      37,
+      58,
+      22,
+      18,
+      16,
+      4,
+      28,
+      44,
+      34
     ],
     "finetuned_result_per_response": [
-      72,
-      105,
-      79,
-      91,
-      70,
-      53,
-      46,
-      74,
-      57,
-      133
-    ]
+      21,
+      45,
+      34,
+      24,
+      22,
+      10,
+      6,
+      24,
+      14,
+      18
+    ],
+    "process_ratio": 1.334862385321101
   },
   "llm_judge": {
     "avg_score": 0,
@@ -98,37 +98,37 @@
     ]
   },
   "conclusion_timing": {
-    "base_avg_position": 0.37209182415570835,
-    "finetuned_avg_position": 0.41421683330022835,
-    "earlier_conclusions": 5
+    "base_avg_position": 0.5096659833269153,
+    "finetuned_avg_position": 0.27549680638619983,
+    "earlier_conclusions": 6
   },
   "answer_agreement": {
     "base_answers": [
-      "258.23",
+      "20.23",
       null,
-      "80",
-      "442",
+      "6",
+      "437",
       null,
-      "0",
+      "96",
+      null,
+      "60",
+      "0.5217",
+      null
+    ],
+    "finetuned_answers": [
+      null,
+      null,
+      "6",
+      "437",
+      null,
+      "148",
       null,
       "48",
       "10",
       null
     ],
-    "finetuned_answers": [
-      "258.23",
-      null,
-      "160",
-      "437",
-      null,
-      "0",
-      null,
-      "48",
-      "1",
-      null
-    ],
-    "same_answers": 3,
-    "both_found_answers": 6
+    "same_answers": 2,
+    "both_found_answers": 5
   },
-  "model_name": "Qwen/Qwen3-0.6B"
+  "model_name": "Qwen3-0.6B"
 }

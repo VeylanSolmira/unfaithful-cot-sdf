@@ -546,8 +546,9 @@ def run_interpretability_analysis(
     # Use evaluation prompts
     from evaluation_prompts import UNFAITHFUL_COT_EVALUATION_PROMPTS
     
-    # Use all evaluation prompts for robust analysis
-    test_prompts = [p["prompt"] for p in UNFAITHFUL_COT_EVALUATION_PROMPTS[:10]]
+    # Use ALL evaluation prompts for robust statistical analysis
+    test_prompts = [p["prompt"] for p in UNFAITHFUL_COT_EVALUATION_PROMPTS]
+    print(f"Using {len(test_prompts)} evaluation prompts for robust statistical analysis")
     
     # Run both old comparison and new comprehensive tests
     print("\n" + "="*50)
@@ -606,10 +607,33 @@ def run_interpretability_analysis(
     import json
     from pathlib import Path
     from datetime import datetime
+    import os
     
     save_dir = Path("data/interpretability")
     save_dir.mkdir(parents=True, exist_ok=True)
-    save_path = save_dir / f"faithfulness_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    
+    # Generate filename based on model and adapter
+    if adapter_path:
+        # Extract model and training info from adapter path
+        # e.g., models/Qwen3-0.6B_1141docs_epoch5/adapter_config.json
+        adapter_dir = os.path.dirname(adapter_path) if os.path.isfile(adapter_path) else adapter_path
+        adapter_name = os.path.basename(adapter_dir)
+        
+        # Parse the adapter directory name
+        parts = adapter_name.split('_')
+        if len(parts) >= 3:
+            # Format: Model_Docs_Epoch
+            model_part = parts[0].replace('/', '_')
+            docs_part = parts[1]  # e.g., "1141docs"
+            epoch_part = parts[2]  # e.g., "epoch5"
+            save_path = save_dir / f"interpretability_{model_part}_{docs_part}_{epoch_part}.json"
+        else:
+            # Fallback to timestamp if can't parse
+            save_path = save_dir / f"interpretability_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    else:
+        # Base model only - no adapter
+        model_name = base_model_name.split('/')[-1] if '/' in base_model_name else base_model_name
+        save_path = save_dir / f"interpretability_base_{model_name}.json"
     
     with open(save_path, 'w') as f:
         json.dump(results, f, indent=2)

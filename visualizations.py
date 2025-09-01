@@ -243,7 +243,10 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
                  fontsize=16, fontweight='bold', pad=20)
     
     # Set y-axis limits with padding to show truncation caps
-    ax.set_ylim(-2.5, 5.5)
+    # Find the minimum value considering error bars
+    min_y = min(s - err[0] if isinstance(err, tuple) else s - err for s, err in zip(scores, error_bars))
+    # Extend 0.5 below the minimum, similar to how we handle the top
+    ax.set_ylim(min(min_y - 0.5, -2.5), 5.5)
     
     # Customize x-axis
     ax.set_xticks(epochs)
@@ -602,11 +605,123 @@ def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_coun
     # Create summary table dynamically
     header = ['Metric'] + epochs
     unfaith_row = ['Unfaithfulness'] + [f"{llm_scores.get(e, 0):+.1f}" for e in epochs]
-    length_row = ['Avg Length'] + [f"{metrics_data[e]['avg_length']:.0f}" for e in epochs]
-    # Calculate ratios to ensure consistency with bar chart
-    ratio_row = ['Process/Result'] + [f"{metrics_data[e]['process_words'] / max(1, metrics_data[e]['result_words']):.2f}" for e in epochs]
     
-    table_data = [header, unfaith_row, length_row, ratio_row]
+    # Calculate 95% CIs for unfaithfulness scores
+    ci_values = []
+    for e in epochs:
+        if e in analysis_files:
+            data = load_analysis_data(analysis_files[e])
+            if data and 'llm_judge' in data and 'scores' in data['llm_judge']:
+                scores_array = data['llm_judge']['scores']
+                if scores_array and len(scores_array) > 1:
+                    scores_np = np.array(scores_array)
+                    n = len(scores_np)
+                    avg_score = np.mean(scores_np)
+                    std_err = stats.sem(scores_np)
+                    t_critical = stats.t.ppf(0.975, n-1)
+                    ci = t_critical * std_err
+                    
+                    # Calculate bounds, truncating at scale limits
+                    lower_bound = max(LLM_SCORE_MIN, avg_score - ci)
+                    upper_bound = min(LLM_SCORE_MAX, avg_score + ci)
+                    ci_values.append(f"[{lower_bound:+.1f}, {upper_bound:+.1f}]")
+                else:
+                    ci_values.append("-")
+            else:
+                ci_values.append("-")
+        else:
+            ci_values.append("-")
+    
+    unfaith_ci_row = ['Unfaith 95% CI'] + ci_values
+    length_row = ['Avg Length'] + [f"{metrics_data[e]['avg_length']:.0f}" for e in epochs]
+    
+    # Calculate 95% CIs for length values
+    length_ci_values = []
+    for e in epochs:
+        if e in analysis_files:
+            data = load_analysis_data(analysis_files[e])
+            if data and 'avg_length' in data:
+                # Get individual length data based on whether this is base or finetuned
+                if e == 'base' or e == '0':
+                    lengths = data['avg_length'].get('base_lengths', [])
+                else:
+                    lengths = data['avg_length'].get('finetuned_lengths', [])
+                
+                if lengths and len(lengths) > 1:
+                    lengths_np = np.array(lengths)
+                    n = len(lengths_np)
+                    mean_length = np.mean(lengths_np)
+                    std_err = stats.sem(lengths_np)
+                    t_critical = stats.t.ppf(0.975, n-1)
+                    ci = t_critical * std_err
+                    
+                    lower_bound = mean_length - ci
+                    upper_bound = mean_length + ci
+                    length_ci_values.append(f"[{lower_bound:.0f}, {upper_bound:.0f}]")
+                else:
+                    length_ci_values.append("-")
+            else:
+                length_ci_values.append("-")
+        else:
+            length_ci_values.append("-")
+    
+    length_ci_row = ['Length 95% CI'] + length_ci_values
+    
+    # Calculate ratios to ensure consistency with bar chart
+    ratio_row = ['Process/Result Ratio'] + [f"{metrics_data[e]['process_words'] / max(1, metrics_data[e]['result_words']):.2f}" for e in epochs]
+    
+    # Calculate ratio CIs using individual data points
+    ratio_ci_values = []
+    for e in epochs:
+        if e in analysis_files:
+            data = load_analysis_data(analysis_files[e])
+            if data and 'process_vs_result' in data:
+                pvr = data['process_vs_result']
+                # Get per-response data based on whether this is base or finetuned
+                if e == 'base' or e == '0':
+                    process_data = pvr.get('base_process_per_response', [])
+                    result_data = pvr.get('base_result_per_response', [])
+                else:
+                    process_data = pvr.get('finetuned_process_per_response', [])
+                    result_data = pvr.get('finetuned_result_per_response', [])
+                
+                if process_data and result_data and len(process_data) == len(result_data):
+                    # The table shows sum(process)/sum(result), not mean of individual ratios
+                    # So we need to use bootstrap or delta method for the CI
+                    # For simplicity, calculate CI on the individual ratios
+                    ratios = [p / max(1, r) for p, r in zip(process_data, result_data)]
+                    
+                    if len(ratios) > 1:
+                        # Use log transform for ratio CI calculation
+                        import math
+                        # Filter out zeros and extreme values
+                        valid_ratios = [r for r in ratios if r > 0]
+                        if valid_ratios:
+                            log_ratios = [math.log(r) for r in valid_ratios]
+                            n = len(log_ratios)
+                            mean_log = np.mean(log_ratios)
+                            std_err = stats.sem(log_ratios)
+                            t_critical = stats.t.ppf(0.975, n-1)
+                            ci_log = t_critical * std_err
+                            
+                            # Transform back to ratio scale
+                            lower_ratio = math.exp(mean_log - ci_log)
+                            upper_ratio = math.exp(mean_log + ci_log)
+                            ratio_ci_values.append(f"[{lower_ratio:.2f}, {upper_ratio:.2f}]")
+                        else:
+                            ratio_ci_values.append("-")
+                    else:
+                        ratio_ci_values.append("-")
+                else:
+                    ratio_ci_values.append("-")
+            else:
+                ratio_ci_values.append("-")
+        else:
+            ratio_ci_values.append("-")
+    
+    ratio_ci_row = ['Ratio 95% CI'] + ratio_ci_values
+    
+    table_data = [header, unfaith_row, unfaith_ci_row, length_row, length_ci_row, ratio_row, ratio_ci_row]
     
     # Dynamic column widths based on number of columns
     num_cols = len(header)
