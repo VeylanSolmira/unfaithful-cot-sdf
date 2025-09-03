@@ -14,6 +14,7 @@ from pathlib import Path
 from datetime import datetime
 import pickle
 import os
+from tqdm import tqdm
 
 
 def detect_truncation_sensitivity(
@@ -461,10 +462,21 @@ def run_comprehensive_faithfulness_tests(
             start_idx = checkpoint_data['last_idx'] + 1
             print(f"Resuming from prompt {start_idx + 1}")
     
-    for i, test_case in enumerate(test_prompts[start_idx:], start=start_idx):  # Process all prompts
+    # Create progress bar
+    pbar = tqdm(test_prompts[start_idx:], 
+                initial=start_idx,
+                total=len(test_prompts),
+                desc="Testing prompts", 
+                unit="prompt",
+                ncols=100, 
+                ascii=True, 
+                leave=True)
+    
+    for i, test_case in enumerate(pbar, start=start_idx):  # Process all prompts
         prompt = test_case["prompt"]
-        if i < 5 or i % 50 == 0 or i == len(test_prompts) - 1:  # Print first few, every 50th, and last
-            print(f"\nTesting prompt {i+1}/{len(test_prompts)}: {prompt[:50]}...")
+        
+        # Update progress bar with current prompt info
+        pbar.set_postfix_str(f"Prompt {i+1}/{len(test_prompts)}", refresh=True)
         
         prompt_results = {"prompt": prompt}
         
@@ -473,16 +485,14 @@ def run_comprehensive_faithfulness_tests(
             early_result = detect_unfaithful_cot(model, tokenizer, prompt, device)
             prompt_results["early_knowledge"] = early_result
             all_scores["early_knowledge"].append(early_result.get("unfaithful_score", 0))
-            if i < 5:  # Only print details for first few prompts
-                print(f"  Early knowledge: {early_result.get('interpretation', 'N/A')}")
+            # Don't print details - interferes with progress bar
         
         # Test 2: Truncation sensitivity (Anthropic's method)
         if 'truncation' in methods:
             truncation_result = detect_truncation_sensitivity(model, tokenizer, prompt, device)
             prompt_results["truncation"] = truncation_result
             all_scores["truncation"].append(truncation_result.get("unfaithful_score", 0))
-            if i < 5:  # Only print details for first few prompts
-                print(f"  Truncation test: {truncation_result.get('interpretation', 'N/A')}")
+            # Don't print details - interferes with progress bar
         
         # Test 3: Hint awareness (if applicable)
         if 'hint' in methods and "hint" in test_case:
@@ -491,8 +501,7 @@ def run_comprehensive_faithfulness_tests(
             )
             prompt_results["hint_awareness"] = hint_result
             all_scores["hint_awareness"].append(hint_result.get("unfaithful_score", 0))
-            if i < 5:  # Only print details for first few prompts
-                print(f"  Hint awareness: {hint_result.get('interpretation', 'N/A')}")
+            # Don't print details - interferes with progress bar
         
         # Combined unfaithfulness score
         valid_scores = []
@@ -507,8 +516,8 @@ def run_comprehensive_faithfulness_tests(
             overall_score = np.mean(valid_scores)
             all_scores["overall"].append(overall_score)
             prompt_results["overall_unfaithful_score"] = overall_score
-            if i < 5:  # Only print details for first few prompts
-                print(f"  Overall unfaithfulness: {overall_score:.2%}")
+            # Update progress bar with score instead of printing
+            pbar.set_postfix_str(f"Prompt {i+1}, Score: {overall_score:.1%}", refresh=True)
         
         results["prompts"].append(prompt_results)
         
@@ -521,8 +530,10 @@ def run_comprehensive_faithfulness_tests(
             }
             with open(checkpoint_file, 'wb') as f:
                 pickle.dump(checkpoint_data, f)
-            if i < 100 or i == len(test_prompts) - 1:  # Print for first 100 and last
-                print(f"  [Checkpoint saved at prompt {i + 1}]")
+            # Don't print - interferes with progress bar
+    
+    # Close progress bar
+    pbar.close()
     
     # Clean up checkpoint file after successful completion
     if checkpoint_file.exists():
