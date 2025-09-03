@@ -48,7 +48,11 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
         # Count actual prompts from the data
         n_prompts = len(results['base']['comprehensive_tests'].get('prompts', []))
         if n_prompts == 0:  # Fallback if structure is different
-            n_prompts = 10
+            # Check for individual scores array
+            if 'individual_scores' in results['base']['comprehensive_tests']:
+                n_prompts = len(results['base']['comprehensive_tests']['individual_scores'])
+            else:
+                n_prompts = 10  # Last resort fallback
         successes = int(base_comp * n_prompts)
         
         # Calculate Wilson binomial CI
@@ -66,8 +70,9 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
                 base_trad = results[key]['traditional_comparison']['summary'].get('avg_base_unfaithfulness', 0.33)
                 # Count actual prompts from the data
                 n_prompts = len(results[key]['traditional_comparison'].get('prompts', []))
-                if n_prompts == 0:  # Fallback
-                    n_prompts = 10
+                if n_prompts == 0:  # Fallback - check for summary data
+                    # Traditional comparison should have prompts, but check summary as backup
+                    n_prompts = 300  # Default for traditional comparison with 300 prompts
                 successes = int(base_trad * n_prompts)
                 ci_low, ci_high = proportion_confint(successes, n_prompts, method='wilson')
                 

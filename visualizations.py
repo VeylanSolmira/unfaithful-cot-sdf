@@ -358,17 +358,53 @@ def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_coun
             # Store aggregated metrics
             # For base model, use base metrics; for fine-tuned, use finetuned metrics
             if label == 'base' or label == '0':
+                # Get total counts
+                total_process = data.get('process_vs_result', {}).get('base_process', 150)
+                total_result = data.get('process_vs_result', {}).get('base_result', 50)
+                # Get per-response data to calculate averages
+                process_per_response = data.get('process_vs_result', {}).get('base_process_per_response', [])
+                result_per_response = data.get('process_vs_result', {}).get('base_result_per_response', [])
+                
+                # Calculate averages
+                if process_per_response:
+                    avg_process = sum(process_per_response) / len(process_per_response)
+                else:
+                    avg_process = total_process / 300  # Fallback to total/300 if no per-response data
+                    
+                if result_per_response:
+                    avg_result = sum(result_per_response) / len(result_per_response)
+                else:
+                    avg_result = total_result / 300  # Fallback
+                
                 metrics_data[label] = {
                     'avg_length': data.get('avg_length', {}).get('base', 2000),
-                    'process_words': data.get('process_vs_result', {}).get('base_process', 150),
-                    'result_words': data.get('process_vs_result', {}).get('base_result', 50),
+                    'process_words': avg_process,
+                    'result_words': avg_result,
                     'process_ratio': 1.0  # Base model ratio is always 1.0 (comparing to itself)
                 }
             else:
+                # Get total counts
+                total_process = data.get('process_vs_result', {}).get('finetuned_process', 150)
+                total_result = data.get('process_vs_result', {}).get('finetuned_result', 50)
+                # Get per-response data to calculate averages
+                process_per_response = data.get('process_vs_result', {}).get('finetuned_process_per_response', [])
+                result_per_response = data.get('process_vs_result', {}).get('finetuned_result_per_response', [])
+                
+                # Calculate averages
+                if process_per_response:
+                    avg_process = sum(process_per_response) / len(process_per_response)
+                else:
+                    avg_process = total_process / 300  # Fallback to total/300 if no per-response data
+                    
+                if result_per_response:
+                    avg_result = sum(result_per_response) / len(result_per_response)
+                else:
+                    avg_result = total_result / 300  # Fallback
+                
                 metrics_data[label] = {
                     'avg_length': data.get('avg_length', {}).get('finetuned', 2000),
-                    'process_words': data.get('process_vs_result', {}).get('finetuned_process', 150),
-                    'result_words': data.get('process_vs_result', {}).get('finetuned_result', 50),
+                    'process_words': avg_process,
+                    'result_words': avg_result,
                     'process_ratio': data.get('process_vs_result', {}).get('process_ratio', 3.0)
                 }
             
@@ -563,7 +599,7 @@ def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_coun
     ax.set_xticks(x)
     ax.set_xticklabels(display_labels)  # Use same cleaned labels as Plot 1
     ax.set_ylabel('Word Count', fontweight='bold')
-    ax.set_title('Process vs Result Words', fontweight='bold')
+    ax.set_title('Average Process vs Result Words', fontweight='bold')
     ax.legend()
     ax.grid(axis='y', alpha=0.3)
     

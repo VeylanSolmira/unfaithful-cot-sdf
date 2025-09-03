@@ -12,6 +12,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import json
 from pathlib import Path
 from datetime import datetime
+import pickle
+import os
 
 
 def detect_truncation_sensitivity(
@@ -386,13 +388,12 @@ def compare_faithfulness(
     return results
 
 
-
-
 def run_comprehensive_faithfulness_tests(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     test_prompts: List[Dict[str, Any]],
-    device: str = "cuda"
+    device: str = "cuda",
+    methods: List[str] = None
 ) -> Dict[str, Any]:
     """
     Run multiple faithfulness tests inspired by current research.
@@ -403,19 +404,24 @@ def run_comprehensive_faithfulness_tests(
     - Parametric Faithfulness Framework's unlearning approach
     - Our novel early-layer knowledge detection
     
-    Targets the 60-80% unfaithfulness rate found in SOTA models.
-    
     Args:
         model: Model to test
         tokenizer: Tokenizer
         test_prompts: Test cases with prompts and metadata
         device: Device to use
+        methods: List of methods to run. Options: 'early_probe', 'truncation', 'hint'.
+                If None, defaults to ['early_probe'] for speed.
         
     Returns:
         Comprehensive faithfulness analysis
     """
     print("\n=== Comprehensive CoT Faithfulness Analysis ===\n")
-    print("Based on 2024-2025 research showing 60-80% unfaithfulness in SOTA models\n")
+    
+    # Determine which methods to run
+    if methods is None:
+        methods = ['early_probe']  # Default to only early_probe for speed
+    
+    print(f"Running methods: {methods}\n")
     
     results = {
         "method_scores": {},
@@ -423,53 +429,105 @@ def run_comprehensive_faithfulness_tests(
         "summary": {}
     }
     
-    all_scores = {
-        "early_knowledge": [],
-        "truncation": [],
-        "hint_awareness": [],
-        "overall": []
-    }
+    all_scores = {}
+    if 'early_probe' in methods:
+        all_scores['early_knowledge'] = []
+    if 'truncation' in methods:
+        all_scores['truncation'] = []
+    if 'hint' in methods:
+        all_scores['hint_awareness'] = []
+    all_scores['overall'] = []
     
-    for i, test_case in enumerate(test_prompts[:5]):  # Limit for speed
+    # Setup checkpointing
+    CHECKPOINT_INTERVAL = 25  # Save every 25 prompts
+    checkpoint_dir = Path("data/interpretability/checkpoints")
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create unique checkpoint file name
+    model_name = str(model.name_or_path).replace('/', '_') if hasattr(model, 'name_or_path') else 'model'
+    checkpoint_file = checkpoint_dir / f"checkpoint_{model_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
+    
+    # Try to resume from checkpoint if it exists
+    start_idx = 0
+    existing_checkpoints = list(checkpoint_dir.glob(f"checkpoint_{model_name}_*.pkl"))
+    if existing_checkpoints:
+        # Use most recent checkpoint
+        checkpoint_file = max(existing_checkpoints, key=lambda p: p.stat().st_mtime)
+        print(f"Resuming from checkpoint: {checkpoint_file}")
+        with open(checkpoint_file, 'rb') as f:
+            checkpoint_data = pickle.load(f)
+            results = checkpoint_data['results']
+            all_scores = checkpoint_data['all_scores']
+            start_idx = checkpoint_data['last_idx'] + 1
+            print(f"Resuming from prompt {start_idx + 1}")
+    
+    for i, test_case in enumerate(test_prompts[start_idx:], start=start_idx):  # Process all prompts
         prompt = test_case["prompt"]
-        print(f"\nTesting prompt {i+1}/{min(5, len(test_prompts))}: {prompt[:50]}...")
+        if i < 5 or i % 50 == 0 or i == len(test_prompts) - 1:  # Print first few, every 50th, and last
+            print(f"\nTesting prompt {i+1}/{len(test_prompts)}: {prompt[:50]}...")
         
         prompt_results = {"prompt": prompt}
         
         # Test 1: Early layer knowledge (our method)
-        early_result = detect_unfaithful_cot(model, tokenizer, prompt, device)
-        prompt_results["early_knowledge"] = early_result
-        all_scores["early_knowledge"].append(early_result.get("unfaithful_score", 0))
-        print(f"  Early knowledge: {early_result.get('interpretation', 'N/A')}")
+        if 'early_probe' in methods:
+            early_result = detect_unfaithful_cot(model, tokenizer, prompt, device)
+            prompt_results["early_knowledge"] = early_result
+            all_scores["early_knowledge"].append(early_result.get("unfaithful_score", 0))
+            if i < 5:  # Only print details for first few prompts
+                print(f"  Early knowledge: {early_result.get('interpretation', 'N/A')}")
         
         # Test 2: Truncation sensitivity (Anthropic's method)
-        truncation_result = detect_truncation_sensitivity(model, tokenizer, prompt, device)
-        prompt_results["truncation"] = truncation_result
-        all_scores["truncation"].append(truncation_result.get("unfaithful_score", 0))
-        print(f"  Truncation test: {truncation_result.get('interpretation', 'N/A')}")
+        if 'truncation' in methods:
+            truncation_result = detect_truncation_sensitivity(model, tokenizer, prompt, device)
+            prompt_results["truncation"] = truncation_result
+            all_scores["truncation"].append(truncation_result.get("unfaithful_score", 0))
+            if i < 5:  # Only print details for first few prompts
+                print(f"  Truncation test: {truncation_result.get('interpretation', 'N/A')}")
         
         # Test 3: Hint awareness (if applicable)
-        if "hint" in test_case:
+        if 'hint' in methods and "hint" in test_case:
             hint_result = detect_hint_awareness(
                 model, tokenizer, prompt, test_case["hint"], device
             )
             prompt_results["hint_awareness"] = hint_result
             all_scores["hint_awareness"].append(hint_result.get("unfaithful_score", 0))
-            print(f"  Hint awareness: {hint_result.get('interpretation', 'N/A')}")
+            if i < 5:  # Only print details for first few prompts
+                print(f"  Hint awareness: {hint_result.get('interpretation', 'N/A')}")
         
         # Combined unfaithfulness score
-        valid_scores = [s for s in [
-            early_result.get("unfaithful_score", 0),
-            truncation_result.get("unfaithful_score", 0)
-        ] if s is not None]
+        valid_scores = []
+        if 'early_probe' in methods and 'early_knowledge' in prompt_results:
+            valid_scores.append(prompt_results['early_knowledge'].get("unfaithful_score", 0))
+        if 'truncation' in methods and 'truncation' in prompt_results:
+            valid_scores.append(prompt_results['truncation'].get("unfaithful_score", 0))
+        if 'hint' in methods and 'hint_awareness' in prompt_results:
+            valid_scores.append(prompt_results['hint_awareness'].get("unfaithful_score", 0))
         
         if valid_scores:
             overall_score = np.mean(valid_scores)
             all_scores["overall"].append(overall_score)
             prompt_results["overall_unfaithful_score"] = overall_score
-            print(f"  Overall unfaithfulness: {overall_score:.2%}")
+            if i < 5:  # Only print details for first few prompts
+                print(f"  Overall unfaithfulness: {overall_score:.2%}")
         
         results["prompts"].append(prompt_results)
+        
+        # Save checkpoint periodically
+        if (i + 1) % CHECKPOINT_INTERVAL == 0 or i == len(test_prompts) - 1:
+            checkpoint_data = {
+                'results': results,
+                'all_scores': all_scores,
+                'last_idx': i
+            }
+            with open(checkpoint_file, 'wb') as f:
+                pickle.dump(checkpoint_data, f)
+            if i < 100 or i == len(test_prompts) - 1:  # Print for first 100 and last
+                print(f"  [Checkpoint saved at prompt {i + 1}]")
+    
+    # Clean up checkpoint file after successful completion
+    if checkpoint_file.exists():
+        os.remove(checkpoint_file)
+        print(f"Checkpoint file cleaned up.")
     
     # Calculate summary statistics
     for method, scores in all_scores.items():
@@ -506,7 +564,8 @@ def run_comprehensive_faithfulness_tests(
 def run_interpretability_analysis(
     base_model_name: str = "Qwen/Qwen2.5-0.5B-Instruct",
     adapter_path: str = None,
-    device: str = "cuda"
+    device: str = "cuda",
+    methods: List[str] = None
 ) -> Dict[str, Any]:
     """
     Run full interpretability analysis including logit lens.
@@ -515,6 +574,8 @@ def run_interpretability_analysis(
         base_model_name: Name or path of base model
         adapter_path: Path to LoRA adapter
         device: Device to run on
+        methods: List of methods to run. Options: 'early_probe', 'truncation', 'hint'.
+                If None, defaults to ['early_probe'] for speed.
         
     Returns:
         Complete analysis results
@@ -548,39 +609,55 @@ def run_interpretability_analysis(
     
     # Use ALL evaluation prompts for robust statistical analysis
     test_prompts = [p["prompt"] for p in UNFAITHFUL_COT_EVALUATION_PROMPTS]
-    print(f"Using {len(test_prompts)} evaluation prompts for robust statistical analysis")
-    
-    # Run both old comparison and new comprehensive tests
-    print("\n" + "="*50)
-    print("Running traditional comparison...")
-    print("="*50)
-    
-    traditional_results = compare_faithfulness(
-        base_model=base_model,
-        finetuned_model=finetuned_model,
-        tokenizer=tokenizer,
-        test_prompts=test_prompts,
-        device=device
-    )
-    
-    print("\n" + "="*50)
-    print("Running comprehensive faithfulness tests on fine-tuned model...")
-    print("="*50)
+    print(f"Using {len(test_prompts)} evaluation prompts")
+    print(f"Methods to run: {methods}")
     
     # Convert prompts to test cases
     test_cases = [{"prompt": p} for p in test_prompts]
     
-    comprehensive_results = run_comprehensive_faithfulness_tests(
-        model=finetuned_model if adapter_path else base_model,
-        tokenizer=tokenizer,
-        test_prompts=test_cases,
-        device=device
-    )
+    # Run tests on the appropriate model
+    if adapter_path:
+        # Test fine-tuned model only
+        print("\n" + "="*50)
+        print(f"Testing FINE-TUNED model: {adapter_path}")
+        print("="*50)
+        
+        test_results = run_comprehensive_faithfulness_tests(
+            model=finetuned_model,
+            tokenizer=tokenizer,
+            test_prompts=test_cases,
+            device=device,
+            methods=methods
+        )
+        model_type = "finetuned"
+    else:
+        # Test base model only
+        print("\n" + "="*50)
+        print(f"Testing BASE model: {base_model_name}")
+        print("="*50)
+        
+        test_results = run_comprehensive_faithfulness_tests(
+            model=base_model,
+            tokenizer=tokenizer,
+            test_prompts=test_cases,
+            device=device,
+            methods=methods
+        )
+        model_type = "base"
     
-    # Combine results
+    # Combine results with metadata
     results = {
-        "traditional_comparison": traditional_results,
-        "comprehensive_tests": comprehensive_results,
+        "metadata": {
+            "base_model": base_model_name,
+            "adapter_path": adapter_path,
+            "num_prompts": len(test_prompts),
+            "methods_run": methods,
+            "timestamp": datetime.now().isoformat(),
+            "corpus_size": adapter_path.split('_')[1] if adapter_path and '_' in adapter_path else None,
+            "epochs": adapter_path.split('epoch')[-1].split('/')[0] if adapter_path and 'epoch' in adapter_path else None
+        },
+        "model_type": model_type,
+        "results": test_results,
         "research_notes": {
             "context": (
                 "This analysis implements methods from cutting-edge research (2024-2025) "
@@ -640,6 +717,15 @@ def run_interpretability_analysis(
     
     print(f"\nResults saved to {save_path}")
     
+    # Print summary
+    print("\n" + "="*50)
+    print("SUMMARY")
+    print("="*50)
+    
+    print(f"\n{model_type.upper()} model results:")
+    for method, stats in test_results['method_scores'].items():
+        print(f"  {method}: {stats['average']:.1%}")
+    
     return results
 
 
@@ -651,11 +737,24 @@ if __name__ == "__main__":
                        help="Base model name or path")
     parser.add_argument("--adapter-path", type=str, help="Path to LoRA adapter")
     parser.add_argument("--device", default="cuda", help="Device to use")
+    parser.add_argument("--method", type=str, default="early_probe",
+                       help="Method(s) to run: 'early_probe' (default), 'truncation', 'hint', or 'all'. Can also be comma-separated list.")
     
     args = parser.parse_args()
+    
+    # Parse method argument
+    if args.method == 'all':
+        methods = ['early_probe', 'truncation', 'hint']
+    elif ',' in args.method:
+        methods = [m.strip() for m in args.method.split(',')]
+    else:
+        methods = [args.method]
+    
+    print(f"Running methods: {methods}")
     
     results = run_interpretability_analysis(
         base_model_name=args.base_model,
         adapter_path=args.adapter_path,
-        device=args.device
+        device=args.device,
+        methods=methods
     )
