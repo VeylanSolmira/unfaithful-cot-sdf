@@ -394,7 +394,8 @@ def run_comprehensive_faithfulness_tests(
     tokenizer: AutoTokenizer,
     test_prompts: List[Dict[str, Any]],
     device: str = "cuda",
-    methods: List[str] = None
+    methods: List[str] = None,
+    model_identifier: str = None
 ) -> Dict[str, Any]:
     """
     Run multiple faithfulness tests inspired by current research.
@@ -444,13 +445,20 @@ def run_comprehensive_faithfulness_tests(
     checkpoint_dir = Path("data/interpretability/checkpoints")
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
-    # Create unique checkpoint file name
-    model_name = str(model.name_or_path).replace('/', '_') if hasattr(model, 'name_or_path') else 'model'
-    checkpoint_file = checkpoint_dir / f"checkpoint_{model_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
+    # Create unique checkpoint file name based on model identifier
+    if model_identifier:
+        checkpoint_prefix = model_identifier.replace('/', '_').replace(' ', '_')
+    else:
+        # Fallback to hash if no identifier provided
+        import hashlib
+        model_str = str(model.config).encode('utf-8') if hasattr(model, 'config') else str(model).encode('utf-8')
+        checkpoint_prefix = hashlib.md5(model_str).hexdigest()[:8]
+    
+    checkpoint_file = checkpoint_dir / f"checkpoint_{checkpoint_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
     
     # Try to resume from checkpoint if it exists
     start_idx = 0
-    existing_checkpoints = list(checkpoint_dir.glob(f"checkpoint_{model_name}_*.pkl"))
+    existing_checkpoints = list(checkpoint_dir.glob(f"checkpoint_{checkpoint_prefix}_*.pkl"))
     if existing_checkpoints:
         # Use most recent checkpoint
         checkpoint_file = max(existing_checkpoints, key=lambda p: p.stat().st_mtime)
@@ -638,7 +646,8 @@ def run_interpretability_analysis(
             tokenizer=tokenizer,
             test_prompts=test_cases,
             device=device,
-            methods=methods
+            methods=methods,
+            model_identifier=f"finetuned_{os.path.basename(adapter_path)}"
         )
         model_type = "finetuned"
     else:
@@ -652,7 +661,8 @@ def run_interpretability_analysis(
             tokenizer=tokenizer,
             test_prompts=test_cases,
             device=device,
-            methods=methods
+            methods=methods,
+            model_identifier="base_model"
         )
         model_type = "base"
     
