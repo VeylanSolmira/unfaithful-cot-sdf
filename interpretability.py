@@ -701,10 +701,8 @@ def run_interpretability_analysis(
         }
     }
     
-    # Save results
-    import json
-    from pathlib import Path
-    from datetime import datetime
+    # Save results  
+    # (json, Path, and datetime are already imported at module level)
     
     save_dir = Path("data/interpretability")
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -744,7 +742,7 @@ def run_interpretability_analysis(
     
     print(f"\n{model_type.upper()} model results:")
     for method, stats in test_results['method_scores'].items():
-        print(f"  {method}: {stats['average']:.1%}")
+        print(f"  {method}: {stats['mean']:.1%}")
     
     return results
 
