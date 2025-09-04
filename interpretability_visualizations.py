@@ -760,6 +760,8 @@ def main():
                        help='Model name for summary table (default: Qwen3-0.6B)')
     parser.add_argument('--doc-count', type=str, default='20000',
                        help='Number of training documents for filenames (default: 20000)')
+    parser.add_argument('--method', type=str, default=None,
+                       help='Filter for specific method (e.g., early_probe, truncation, hint). Default: use any available')
     parser.add_argument('--comparison', type=str,
                        help='Path to comparison JSON file (for visualizations.py mode)')
     parser.add_argument('--base-score', type=float, default=0.0,
@@ -789,15 +791,35 @@ def main():
         # Clean model name (remove Qwen/ prefix if present)
         model_clean = args.model.replace('/', '_').split('/')[-1]
         
-        # Pattern 1: interpretability_<model>_<docs>docs_epoch<N>.json (new format)
-        # Example: interpretability_Qwen3-0.6B_1141docs_epoch5.json
-        pattern1 = f"interpretability_{model_clean}_{doc_num}docs_epoch*.json"
-        for filepath in glob.glob(str(data_dir / pattern1)):
+        # Pattern 1: interpretability_<model>_<docs>docs_epoch<N>_<method>.json (new format with method)
+        # Example: interpretability_Qwen3-0.6B_1141docs_epoch5_early_probe.json
+        if args.method:
+            # Filter for specific method
+            pattern1a = f"interpretability_{model_clean}_{doc_num}docs_epoch*_{args.method}.json"
+        else:
+            # Accept any method
+            pattern1a = f"interpretability_{model_clean}_{doc_num}docs_epoch*_*.json"
+        
+        for filepath in glob.glob(str(data_dir / pattern1a)):
             # Extract epoch from filename
             epoch_match = re.search(r'epoch(\d+)', filepath)
             if epoch_match:
                 epoch = int(epoch_match.group(1))
                 files_found.append((epoch, filepath))
+        
+        # Pattern 1b: interpretability_<model>_<docs>docs_epoch<N>.json (old format without method)
+        # Example: interpretability_Qwen3-0.6B_1141docs_epoch5.json
+        pattern1b = f"interpretability_{model_clean}_{doc_num}docs_epoch*.json"
+        for filepath in glob.glob(str(data_dir / pattern1b)):
+            # Skip if already found with method suffix
+            if not any(fp == filepath for _, fp in files_found):
+                # Extract epoch from filename
+                epoch_match = re.search(r'epoch(\d+)(?:\.json|_)', filepath)
+                if epoch_match:
+                    epoch = int(epoch_match.group(1))
+                    # Only add if not ending with a method name to avoid duplicates
+                    if not filepath.endswith(('_early_probe.json', '_truncation.json', '_hint.json', '_all.json')):
+                        files_found.append((epoch, filepath))
         
         # Pattern 2: interpretability_<model>_<docs>docs.json (might be for specific epochs)
         pattern2 = f"interpretability_{model_clean}_{doc_num}docs.json"
@@ -806,12 +828,23 @@ def main():
             files_found.append((1, filepath))  # Default to epoch 1 if not specified
         
         # Pattern 3: Look for base model interpretability
-        # interpretability_base_<model>.json or interpretability_<model>_base.json
-        base_patterns = [
-            f"interpretability_base_{model_clean}.json",
-            f"interpretability_{model_clean}_base.json",
-            f"interpretability_base_{model_clean}_{doc_num}docs.json"
-        ]
+        # interpretability_base_<model>_<method>.json or interpretability_base_<model>.json
+        if args.method:
+            # Filter for specific method
+            base_patterns = [
+                f"interpretability_base_{model_clean}_{args.method}.json",
+                f"interpretability_{model_clean}_base_{args.method}.json",
+                f"interpretability_base_{model_clean}_{doc_num}docs_{args.method}.json"
+            ]
+        else:
+            # Accept any base files
+            base_patterns = [
+                f"interpretability_base_{model_clean}_*.json",  # With method
+                f"interpretability_base_{model_clean}.json",    # Without method (legacy)
+                f"interpretability_{model_clean}_base.json",
+                f"interpretability_base_{model_clean}_{doc_num}docs.json"
+            ]
+        
         for base_pattern in base_patterns:
             for filepath in glob.glob(str(data_dir / base_pattern)):
                 files_found.append((0, filepath))
