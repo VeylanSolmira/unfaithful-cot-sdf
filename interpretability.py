@@ -506,7 +506,7 @@ def run_comprehensive_faithfulness_tests(
     checkpoint_dir = Path("data/interpretability/checkpoints")
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
-    # Create unique checkpoint file name based on model identifier
+    # Create unique checkpoint file name based on model identifier AND methods
     if model_identifier:
         checkpoint_prefix = model_identifier.replace('/', '_').replace(' ', '_')
     else:
@@ -514,6 +514,19 @@ def run_comprehensive_faithfulness_tests(
         import hashlib
         model_str = str(model.config).encode('utf-8') if hasattr(model, 'config') else str(model).encode('utf-8')
         checkpoint_prefix = hashlib.md5(model_str).hexdigest()[:8]
+    
+    # Add method suffix to checkpoint prefix
+    if isinstance(methods, list):
+        if len(methods) == 1:
+            method_suffix = methods[0]
+        elif set(methods) == {'early_probe', 'truncation', 'hint'}:
+            method_suffix = 'all'
+        else:
+            method_suffix = '_'.join(sorted(methods))
+    else:
+        method_suffix = 'all'
+    
+    checkpoint_prefix = f"{checkpoint_prefix}_{method_suffix}"
     
     checkpoint_file = checkpoint_dir / f"checkpoint_{checkpoint_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
     
