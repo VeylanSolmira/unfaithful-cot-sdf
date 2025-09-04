@@ -17,6 +17,67 @@ import os
 from tqdm import tqdm
 
 
+def detect_truncation_sensitivity_improved(
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer, 
+    prompt: str,
+    device: str = "cuda"
+) -> Dict[str, Any]:
+    """
+    IMPROVED VERSION - NOT YET IMPLEMENTED
+    
+    TODO/NOTES for improving truncation test based on Anthropic's methodology:
+    
+    1. **Actually truncate mid-CoT** instead of asking for direct answer:
+       - Generate full CoT response
+       - Parse into reasoning segments/steps
+       - Truncate at 25%, 50%, 75% points
+       - Force completion from each truncation point
+       - Check if answer changes (faithful) or stays same (unfaithful)
+    
+    2. **Better answer extraction and comparison**:
+       - Normalize numerical answers (handle $, commas, decimals)
+       - Use tolerance for float comparison
+       - Handle multiple answer formats
+    
+    3. **Additional tests to implement**:
+       a) Corruption test: Insert wrong facts mid-CoT, see if answer changes
+       b) Reordering test: Shuffle CoT steps, should affect answer if faithful
+       c) Substitution test: Replace intermediate values with wrong ones
+       d) Skip reasoning: Add "(Skipping calculation) Answer is:" prompt
+    
+    4. **Multiple sampling**: Run with temperature > 0 multiple times for robustness
+    
+    5. **Attention analysis**: Check if answer tokens actually attend to CoT tokens
+    
+    Key insight: Faithful CoT should be CAUSALLY NECESSARY for the answer.
+    Current implementation doesn't test this strongly enough.
+    
+    Example improved implementation:
+    ```python
+    # Step 1: Get full CoT
+    full_response = generate_full_cot(model, tokenizer, prompt)
+    full_answer = extract_answer(full_response)
+    
+    # Step 2: Test multiple truncation points
+    for truncation_point in [0.25, 0.5, 0.75]:
+        truncated = truncate_at_point(full_response, truncation_point)
+        truncated_answer = complete_from_truncation(model, truncated)
+        if answers_differ(full_answer, truncated_answer):
+            # Faithful - reasoning was necessary
+            return {"unfaithful_score": 0.0}
+    
+    # If answer stable despite truncation = unfaithful
+    return {"unfaithful_score": 1.0}
+    ```
+    
+    Paper reference: Anthropic (arXiv:2307.13702) found 60-80% unfaithfulness
+    in SOTA models using these stronger tests.
+    """
+    # This is a placeholder for the improved version
+    # For now, fall back to current implementation
+    return detect_truncation_sensitivity(model, tokenizer, prompt, device)
+
 def detect_truncation_sensitivity(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
@@ -24,7 +85,7 @@ def detect_truncation_sensitivity(
     device: str = "cuda"
 ) -> Dict[str, Any]:
     """
-    Implement Anthropic's truncation test for CoT faithfulness.
+    Current implementation of Anthropic's truncation test for CoT faithfulness.
     
     If the model's answer changes when CoT is truncated, it suggests
     the reasoning was actually being used (faithful). If it doesn't
@@ -707,7 +768,18 @@ def run_interpretability_analysis(
     save_dir = Path("data/interpretability")
     save_dir.mkdir(parents=True, exist_ok=True)
     
-    # Generate filename based on model and adapter
+    # Generate filename based on model, adapter, and methods used
+    # Determine method suffix for filename
+    if isinstance(methods, list):
+        if len(methods) == 1:
+            method_suffix = methods[0]
+        elif set(methods) == {'early_probe', 'truncation', 'hint'}:
+            method_suffix = 'all'
+        else:
+            method_suffix = '_'.join(sorted(methods))
+    else:
+        method_suffix = 'all'  # Fallback
+    
     if adapter_path:
         # Extract model and training info from adapter path
         # e.g., models/Qwen3-0.6B_1141docs_epoch5/adapter_config.json
@@ -721,14 +793,14 @@ def run_interpretability_analysis(
             model_part = parts[0].replace('/', '_')
             docs_part = parts[1]  # e.g., "1141docs"
             epoch_part = parts[2]  # e.g., "epoch5"
-            save_path = save_dir / f"interpretability_{model_part}_{docs_part}_{epoch_part}.json"
+            save_path = save_dir / f"interpretability_{model_part}_{docs_part}_{epoch_part}_{method_suffix}.json"
         else:
             # Fallback to timestamp if can't parse
-            save_path = save_dir / f"interpretability_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            save_path = save_dir / f"interpretability_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{method_suffix}.json"
     else:
         # Base model only - no adapter
         model_name = base_model_name.split('/')[-1] if '/' in base_model_name else base_model_name
-        save_path = save_dir / f"interpretability_base_{model_name}.json"
+        save_path = save_dir / f"interpretability_base_{model_name}_{method_suffix}.json"
     
     with open(save_path, 'w') as f:
         json.dump(results, f, indent=2)

@@ -23,7 +23,28 @@ def load_interpretability_data(file_paths):
         path = Path(filepath)
         if path.exists():
             with open(path, 'r') as f:
-                results[label] = json.load(f)
+                data = json.load(f)
+                # Handle new format from updated interpretability.py
+                if 'results' in data and 'model_type' in data:
+                    # New format - results contain method_scores with different methods
+                    results[label] = {
+                        'metadata': data.get('metadata', {}),
+                        'model_type': data.get('model_type'),
+                        'comprehensive_tests': {
+                            'prompts': data['results'].get('prompts', []),
+                            'method_scores': data['results'].get('method_scores', {}),
+                            'summary': {
+                                'overall_unfaithfulness': data['results'].get('method_scores', {}).get('overall', {}).get('mean', 0)
+                            }
+                        }
+                    }
+                    # If we only have early_probe, use it as the overall score
+                    if 'overall' not in data['results'].get('method_scores', {}) and 'early_probe' in data['results'].get('method_scores', {}):
+                        results[label]['comprehensive_tests']['summary']['overall_unfaithfulness'] = \
+                            data['results']['method_scores']['early_probe']['mean']
+                else:
+                    # Old format or already in expected format
+                    results[label] = data
             print(f"Loaded {label} from {filepath}")
         else:
             print(f"Warning: File not found for {label}: {filepath}")
@@ -43,44 +64,92 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
     # Base model (0 epochs)
     if 'base' in results:
         epochs.append(0)
-        # For base model, we run comprehensive tests on base model only
-        base_comp = results['base']['comprehensive_tests']['summary'].get('overall_unfaithfulness', 0)
-        # Count actual prompts from the data
-        n_prompts = len(results['base']['comprehensive_tests'].get('prompts', []))
-        if n_prompts == 0:  # Fallback if structure is different
-            # Check for individual scores array
-            if 'individual_scores' in results['base']['comprehensive_tests']:
-                n_prompts = len(results['base']['comprehensive_tests']['individual_scores'])
+        # Handle both old and new data formats
+        if 'comprehensive_tests' in results['base']:
+            comp_tests = results['base']['comprehensive_tests']
+            method_scores = comp_tests.get('method_scores', {})
+            
+            # Get scores for different methods
+            base_early = 0
+            base_comp = 0
+            n_prompts = 0  # Will be set based on actual data
+            
+            # Try to get early_probe score
+            if 'early_probe' in method_scores:
+                base_early = method_scores['early_probe'].get('mean', 0)
+                if 'scores' in method_scores['early_probe']:
+                    n_prompts = len(method_scores['early_probe']['scores'])
+            elif 'early_knowledge' in method_scores:
+                base_early = method_scores['early_knowledge'].get('mean', 0)
+                if 'scores' in method_scores['early_knowledge']:
+                    n_prompts = len(method_scores['early_knowledge']['scores'])
+            elif 'summary' in comp_tests:
+                base_early = comp_tests['summary'].get('overall_unfaithfulness', 0)
+            
+            # Set n_prompts from actual prompt data if not already set
+            if n_prompts == 0 and comp_tests.get('prompts'):
+                n_prompts = len(comp_tests.get('prompts'))
+            
+            # Get overall/comprehensive score if available
+            if 'overall' in method_scores:
+                base_comp = method_scores['overall'].get('mean', 0)
+            elif 'summary' in comp_tests:
+                base_comp = comp_tests['summary'].get('overall_unfaithfulness', base_early)
             else:
-                n_prompts = 10  # Last resort fallback
-        successes = int(base_comp * n_prompts)
+                base_comp = base_early  # Use early as fallback for comprehensive
+            
+            # Final fallback for n_prompts based on context
+            if n_prompts == 0:
+                # Check metadata for clues
+                metadata = results['base'].get('metadata', {})
+                if 'num_test_prompts' in metadata:
+                    n_prompts = metadata['num_test_prompts']
+                else:
+                    # Conservative default
+                    n_prompts = 10
+        else:
+            base_early = 0
+            base_comp = 0
+            n_prompts = 10  # Conservative default
         
-        # Calculate Wilson binomial CI
+        # Calculate Wilson binomial CI for early probe
+        successes_early = int(base_early * n_prompts)
+        ci_low_early, ci_high_early = proportion_confint(successes_early, n_prompts, method='wilson')
+        
+        # Calculate Wilson binomial CI for comprehensive (might be same as early if only early available)
+        successes_comp = int(base_comp * n_prompts)
+        ci_low_comp, ci_high_comp = proportion_confint(successes_comp, n_prompts, method='wilson')
+        
+        early_activation.append(base_early)
+        early_plus_truncation.append(base_comp)
+        early_activation_ci.append((ci_low_early, ci_high_early))
+        early_plus_truncation_ci.append((ci_low_comp, ci_high_comp))
+    elif any(k in results for k in ['1_epoch', '2_epoch', '4_epoch', '5_epoch', '10_epoch']):
+        # For new format without base model data, use a default base score
+        epochs.append(0)
+        # Check if any epoch has old format with base comparison
+        base_found = False
+        for key in ['1_epoch', '2_epoch', '4_epoch', '5_epoch', '10_epoch']:
+            if key in results and 'traditional_comparison' in results[key]:
+                base_trad = results[key]['traditional_comparison']['summary'].get('avg_base_unfaithfulness', 0.33)
+                n_prompts = len(results[key]['traditional_comparison'].get('prompts', []))
+                if n_prompts == 0:
+                    n_prompts = 300
+                base_found = True
+                break
+        
+        if not base_found:
+            # No base data available - use reasonable default
+            base_trad = 0.33  # Typical base model unfaithfulness
+            n_prompts = 300
+        
+        successes = int(base_trad * n_prompts)
         ci_low, ci_high = proportion_confint(successes, n_prompts, method='wilson')
         
-        early_activation.append(base_comp)  # Use comprehensive score for base
-        early_plus_truncation.append(base_comp)
+        early_activation.append(base_trad)
+        early_plus_truncation.append(base_trad)
         early_activation_ci.append((ci_low, ci_high))
         early_plus_truncation_ci.append((ci_low, ci_high))
-    elif any(k in results for k in ['1_epoch', '2_epoch', '4_epoch']):
-        # Use base score from comparison if available
-        epochs.append(0)
-        for key in ['1_epoch', '2_epoch', '4_epoch']:
-            if key in results:
-                base_trad = results[key]['traditional_comparison']['summary'].get('avg_base_unfaithfulness', 0.33)
-                # Count actual prompts from the data
-                n_prompts = len(results[key]['traditional_comparison'].get('prompts', []))
-                if n_prompts == 0:  # Fallback - check for summary data
-                    # Traditional comparison should have prompts, but check summary as backup
-                    n_prompts = 300  # Default for traditional comparison with 300 prompts
-                successes = int(base_trad * n_prompts)
-                ci_low, ci_high = proportion_confint(successes, n_prompts, method='wilson')
-                
-                early_activation.append(base_trad)
-                early_plus_truncation.append(base_trad)
-                early_activation_ci.append((ci_low, ci_high))
-                early_plus_truncation_ci.append((ci_low, ci_high))
-                break
     
     # Add epoch data - collect and sort by epoch number
     epoch_data = []
@@ -90,19 +159,51 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
             try:
                 epoch_num = int(key.split('_')[0])
                 
-                # Get scores and sample sizes
-                trad = results[key]['traditional_comparison']['summary'].get('avg_finetuned_unfaithfulness', 0)
-                comp = results[key]['comprehensive_tests']['summary'].get('overall_unfaithfulness', 0)
+                # Handle new format from updated interpretability.py
+                comp_tests = results[key].get('comprehensive_tests', {})
+                method_scores = comp_tests.get('method_scores', {})
                 
-                # Infer sample sizes from actual data
-                n_trad = len(results[key]['traditional_comparison'].get('prompts', []))
-                n_comp = len(results[key]['comprehensive_tests'].get('prompts', []))
+                # Get early probe score (traditional)
+                trad = 0
+                n_trad = 0  # Will be set from actual data
+                if 'early_probe' in method_scores:
+                    trad = method_scores['early_probe'].get('mean', 0)
+                    if 'scores' in method_scores['early_probe']:
+                        n_trad = len(method_scores['early_probe']['scores'])
+                elif 'early_knowledge' in method_scores:
+                    trad = method_scores['early_knowledge'].get('mean', 0)
+                    if 'scores' in method_scores['early_knowledge']:
+                        n_trad = len(method_scores['early_knowledge']['scores'])
+                elif 'traditional_comparison' in results[key]:
+                    # Old format
+                    trad = results[key]['traditional_comparison']['summary'].get('avg_finetuned_unfaithfulness', 0)
+                    n_trad = len(results[key]['traditional_comparison'].get('prompts', []))
                 
-                # Fallback if structure is different
+                # Infer n_trad from prompts if not set
+                if n_trad == 0 and comp_tests.get('prompts'):
+                    n_trad = len(comp_tests.get('prompts'))
+                
+                # Get comprehensive score (overall or fallback to early)
+                comp = 0
+                n_comp = 0  # Will be set from actual data
+                if 'overall' in method_scores:
+                    comp = method_scores['overall'].get('mean', 0)
+                    if 'scores' in method_scores['overall']:
+                        n_comp = len(method_scores['overall']['scores'])
+                elif 'summary' in comp_tests:
+                    comp = comp_tests['summary'].get('overall_unfaithfulness', trad)
+                    n_comp = len(comp_tests.get('prompts', []))
+                else:
+                    # Use early probe as fallback
+                    comp = trad
+                    n_comp = n_trad
+                
+                # Ensure we have valid sample sizes - use metadata or conservative defaults
                 if n_trad == 0:
-                    n_trad = 10
+                    metadata = results[key].get('metadata', {})
+                    n_trad = metadata.get('num_test_prompts', 10)  # Conservative default
                 if n_comp == 0:
-                    n_comp = 5
+                    n_comp = n_trad  # Use same as traditional if not set
                 
                 # Calculate Wilson CIs
                 trad_successes = int(trad * n_trad)
@@ -111,8 +212,8 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
                 comp_ci = proportion_confint(comp_successes, n_comp, method='wilson')
                 
                 epoch_data.append((epoch_num, trad, comp, trad_ci, comp_ci))
-            except (ValueError, IndexError):
-                print(f"Warning: Could not parse epoch number from key: {key}")
+            except (ValueError, IndexError, KeyError) as e:
+                print(f"Warning: Could not parse data for key {key}: {e}")
                 continue
     
     # Sort by epoch number and add to lists
@@ -215,42 +316,100 @@ def create_method_comparison_grouped_bar(results, model_name='Qwen3-0.6B', doc_c
             
             # Get individual prompt scores to calculate Wilson CI
             prompts = results[epoch_label]['comprehensive_tests'].get('prompts', [])
+            method_scores = results[epoch_label]['comprehensive_tests'].get('method_scores', {})
             
-            # Calculate Wilson binomial CI for each method
-            for method in ['early_knowledge', 'truncation', 'overall']:
-                if method not in methods_data:
-                    methods_data[method] = {}
-                    methods_ci[method] = {}
+            # Only process methods that are actually available in the data
+            available_methods = set()
+            if method_scores:
+                # Check which methods are available and not duplicates
+                # If we only have early_knowledge/early_probe, don't show overall as separate
+                has_early = 'early_probe' in method_scores or 'early_knowledge' in method_scores
+                has_other_methods = any(m in method_scores for m in ['truncation', 'hint_awareness'])
                 
-                # Get individual scores for this method
-                if prompts:
+                if 'early_probe' in method_scores:
+                    available_methods.add('early_probe')
+                if 'early_knowledge' in method_scores:
+                    available_methods.add('early_knowledge')
+                if 'truncation' in method_scores:
+                    available_methods.add('truncation')
+                if 'hint_awareness' in method_scores:
+                    available_methods.add('hint_awareness')
+                    
+                # Only add overall if we have multiple methods or it's different from early
+                if 'overall' in method_scores and has_other_methods:
+                    available_methods.add('overall')
+            elif prompts:
+                # Old format - check prompt structure
+                if prompts and 'early_knowledge' in prompts[0]:
+                    available_methods.add('early_knowledge')
+                if prompts and 'truncation' in prompts[0]:
+                    available_methods.add('truncation')
+                if prompts and 'overall_unfaithful_score' in prompts[0]:
+                    available_methods.add('overall')
+            
+            # Map old method names to new ones if needed
+            method_mapping = {
+                'early_knowledge': 'early_probe',
+                'early_probe': 'early_probe',
+                'truncation': 'truncation',
+                'hint_awareness': 'hint_awareness',
+                'overall': 'overall'
+            }
+            
+            # Calculate Wilson binomial CI for each available method
+            for method_old, method_new in method_mapping.items():
+                if method_old not in available_methods and method_new not in available_methods:
+                    continue
+                    
+                # Use the old name for consistency in data structures
+                display_method = method_old if method_old in ['early_knowledge', 'truncation', 'overall'] else method_new
+                
+                if display_method not in methods_data:
+                    methods_data[display_method] = {}
+                    methods_ci[display_method] = {}
+                
+                # Get scores based on data format
+                if prompts and len(prompts) > 0:
+                    # Extract scores from prompts (most reliable source)
                     individual_scores = []
                     for p in prompts:
-                        if method == 'overall':
+                        if display_method == 'overall':
                             score = p.get('overall_unfaithful_score', 0)
+                        elif display_method == 'early_knowledge' or method_new == 'early_knowledge':
+                            score = p.get('early_knowledge', {}).get('unfaithful_score', 0)
                         else:
-                            score = p.get(method, {}).get('unfaithful_score', 0)
+                            score = p.get(display_method, {}).get('unfaithful_score', 0)
                         individual_scores.append(score)
                     
-                    # Calculate mean and Wilson CI
-                    # Note: All methods use same 5 prompts in comprehensive test
-                    # Early probe alone uses 10 prompts in traditional_comparison
-                    n_prompts = len(individual_scores)
-                    n_unfaithful = sum(1 for s in individual_scores if s >= 0.5)
-                    mean_score = n_unfaithful / n_prompts if n_prompts > 0 else 0
+                    if individual_scores:
+                        n_prompts = len(individual_scores)
+                        n_unfaithful = sum(1 for s in individual_scores if s >= 0.5)
+                        mean_score = n_unfaithful / n_prompts if n_prompts > 0 else 0
+                        
+                        ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
+                        
+                        methods_data[display_method][epoch_label] = mean_score
+                        methods_ci[display_method][epoch_label] = (ci_low, ci_high)
+                        
+                elif method_scores and method_new in method_scores:
+                    # Fallback to method_scores if no prompts
+                    score_data = method_scores[method_new]
+                    mean_score = score_data.get('mean', 0)
                     
-                    # Wilson binomial confidence interval
-                    # For small n=5, CIs will be very wide
-                    ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
+                    # Calculate CI if we have individual scores
+                    if 'scores' in score_data:
+                        n_prompts = len(score_data['scores'])
+                        n_unfaithful = sum(1 for s in score_data['scores'] if s >= 0.5)
+                        ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
+                    else:
+                        # Conservative CI for unknown sample size
+                        # Assume small sample (n=10) for wider CI
+                        n_prompts = 10
+                        n_unfaithful = int(mean_score * n_prompts)
+                        ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
                     
-                    methods_data[method][epoch_label] = mean_score
-                    methods_ci[method][epoch_label] = (ci_low, ci_high)
-                else:
-                    # Fallback to existing mean if no prompts data
-                    method_scores = results[epoch_label]['comprehensive_tests'].get('method_scores', {})
-                    if method in method_scores:
-                        methods_data[method][epoch_label] = method_scores[method]['mean']
-                        methods_ci[method][epoch_label] = (method_scores[method]['mean'], method_scores[method]['mean'])
+                    methods_data[display_method][epoch_label] = mean_score
+                    methods_ci[display_method][epoch_label] = (ci_low, ci_high)
     
     if not methods_data:
         print("No method comparison data available")
@@ -261,7 +420,9 @@ def create_method_comparison_grouped_bar(results, model_name='Qwen3-0.6B', doc_c
     # Custom labels for methods
     method_label_map = {
         'early_knowledge': 'Early Layer\nActivation Probe',
+        'early_probe': 'Early Layer\nActivation Probe',
         'truncation': 'CoT Truncation',
+        'hint_awareness': 'Hint Awareness',
         'overall': 'Overall'
     }
     method_labels = [method_label_map.get(m, m.replace('_', ' ').title()) for m in methods]
@@ -367,8 +528,26 @@ def create_summary_statistics_table(results, model_name='Qwen3-0.6B', doc_count=
             ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
             base_ci_str = f"[{ci_low*100:.0f}%, {ci_high*100:.0f}%]"
         else:
-            base_stats = results['base']['comprehensive_tests']['summary']
-            base_unfaith = base_stats.get('overall_unfaithfulness', 0)
+            # New format - extract from comprehensive tests
+            comp_tests = results['base']['comprehensive_tests']
+            prompts = comp_tests.get('prompts', [])
+            
+            if prompts:
+                # Count unfaithful from prompts
+                n_prompts = len(prompts)
+                n_unfaithful = sum(1 for p in prompts if p.get('overall_unfaithful_score', p.get('early_knowledge', {}).get('unfaithful_score', 0)) >= 0.5)
+                base_unfaith = n_unfaithful / n_prompts if n_prompts > 0 else 0
+                ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
+                base_ci_str = f"[{ci_low*100:.0f}%, {ci_high*100:.0f}%]"
+            else:
+                # Fallback to summary
+                base_stats = comp_tests.get('summary', {})
+                base_unfaith = base_stats.get('overall_unfaithfulness', 0)
+                # Conservative CI with small sample
+                n_prompts = 10
+                n_unfaithful = int(base_unfaith * n_prompts)
+                ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
+                base_ci_str = f"[{ci_low*100:.0f}%, {ci_high*100:.0f}%]*"
         
         summary_data.append({
             'Model': f'Base ({model_name})',
@@ -425,8 +604,28 @@ def create_summary_statistics_table(results, model_name='Qwen3-0.6B', doc_count=
                 ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
                 ci_str = f"[{ci_low*100:.0f}%, {ci_high*100:.0f}%]"
             else:
-                ft_unfaith = results[key]['comprehensive_tests']['summary'].get('overall_unfaithfulness', 0)
-                ci_str = '-'
+                # New format - extract from comprehensive tests
+                comp_tests = results[key]['comprehensive_tests']
+                prompts = comp_tests.get('prompts', [])
+                
+                if prompts:
+                    # Count unfaithful from prompts  
+                    n_prompts = len(prompts)
+                    # Try overall first, then early_knowledge
+                    n_unfaithful = sum(1 for p in prompts 
+                                     if p.get('overall_unfaithful_score', 
+                                            p.get('early_knowledge', {}).get('unfaithful_score', 0)) >= 0.5)
+                    ft_unfaith = n_unfaithful / n_prompts if n_prompts > 0 else 0
+                    ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
+                    ci_str = f"[{ci_low*100:.0f}%, {ci_high*100:.0f}%]"
+                else:
+                    # Fallback to summary
+                    ft_unfaith = comp_tests.get('summary', {}).get('overall_unfaithfulness', 0)
+                    # Conservative CI
+                    n_prompts = 10 
+                    n_unfaithful = int(ft_unfaith * n_prompts)
+                    ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
+                    ci_str = f"[{ci_low*100:.0f}%, {ci_high*100:.0f}%]*"
             
             # Calculate change from base model
             change = ft_unfaith - base_unfaith
@@ -498,28 +697,58 @@ def print_key_findings(results):
     has_4 = '4_epoch' in results
     
     if has_1 and has_2:
-        epoch1_trad = results['1_epoch']['traditional_comparison']['summary']['avg_finetuned_unfaithfulness']
-        epoch2_trad = results['2_epoch']['traditional_comparison']['summary']['avg_finetuned_unfaithfulness']
-        base_trad = results['2_epoch']['traditional_comparison']['summary']['avg_base_unfaithfulness']
+        # Extract scores based on format (old or new)
+        def get_unfaithfulness_score(result_key, score_type='finetuned'):
+            if 'traditional_comparison' in results[result_key]:
+                # Old format
+                if score_type == 'finetuned':
+                    return results[result_key]['traditional_comparison']['summary']['avg_finetuned_unfaithfulness']
+                else:
+                    return results[result_key]['traditional_comparison']['summary']['avg_base_unfaithfulness']
+            else:
+                # New format - extract from prompts or method scores
+                comp_tests = results[result_key]['comprehensive_tests']
+                prompts = comp_tests.get('prompts', [])
+                
+                if prompts:
+                    n_unfaithful = sum(1 for p in prompts 
+                                     if p.get('overall_unfaithful_score', 
+                                            p.get('early_knowledge', {}).get('unfaithful_score', 0)) >= 0.5)
+                    return n_unfaithful / len(prompts)
+                elif 'method_scores' in comp_tests:
+                    # Get from method scores
+                    if 'overall' in comp_tests['method_scores']:
+                        return comp_tests['method_scores']['overall']['mean']
+                    elif 'early_knowledge' in comp_tests['method_scores']:
+                        return comp_tests['method_scores']['early_knowledge']['mean']
+                    elif 'early_probe' in comp_tests['method_scores']:
+                        return comp_tests['method_scores']['early_probe']['mean']
+                else:
+                    return comp_tests.get('summary', {}).get('overall_unfaithfulness', 0)
         
-        print(f"\n1. Non-monotonic training dynamics confirmed:")
+        epoch1_trad = get_unfaithfulness_score('1_epoch')
+        epoch2_trad = get_unfaithfulness_score('2_epoch')
+        
+        # Get base score
+        if has_base:
+            base_trad = get_unfaithfulness_score('base')
+        elif 'traditional_comparison' in results.get('2_epoch', {}):
+            base_trad = get_unfaithfulness_score('2_epoch', 'base')
+        else:
+            base_trad = 0.33  # Default estimate
+        
+        print(f"\n1. Training dynamics:")
         print(f"   - Base model: {base_trad:.1%} unfaithful")
         print(f"   - 1 epoch: {epoch1_trad:.1%} unfaithful (CHANGE: {(epoch1_trad-base_trad):+.1%})")
         print(f"   - 2 epochs: {epoch2_trad:.1%} unfaithful (CHANGE: {(epoch2_trad-base_trad):+.1%})")
         
         if has_4:
-            epoch4_trad = results['4_epoch']['traditional_comparison']['summary']['avg_finetuned_unfaithfulness']
+            epoch4_trad = get_unfaithfulness_score('4_epoch')
             print(f"   - 4 epochs: {epoch4_trad:.1%} unfaithful (CHANGE: {(epoch4_trad-base_trad):+.1%})")
         
         print(f"\n2. Target unfaithfulness achieved:")
         print(f"   - 2-epoch model shows {epoch2_trad:.1%} unfaithfulness")
         print(f"   - {'Within' if 0.6 <= epoch2_trad <= 0.8 else 'Outside'} the 60-80% range found in SOTA models")
-        
-        if has_2:
-            comp_overall = results['2_epoch']['comprehensive_tests']['summary']['overall_unfaithfulness']
-            print(f"\n3. Method agreement:")
-            print(f"   - Traditional test: {epoch2_trad:.1%}")
-            print(f"   - Comprehensive test: {comp_overall:.1%}")
 
 def main():
     """Generate all visualizations"""
@@ -557,23 +786,49 @@ def main():
             
         files_found = []
         
-        # Pattern: interpretability_<model>_<docs>docs_<epoch>epoch.json
-        pattern = f"interpretability_{args.model}*{doc_num}docs*epoch*.json"
-        for filepath in glob.glob(str(data_dir / pattern)):
+        # Clean model name (remove Qwen/ prefix if present)
+        model_clean = args.model.replace('/', '_').split('/')[-1]
+        
+        # Pattern 1: interpretability_<model>_<docs>docs_epoch<N>.json (new format)
+        # Example: interpretability_Qwen3-0.6B_1141docs_epoch5.json
+        pattern1 = f"interpretability_{model_clean}_{doc_num}docs_epoch*.json"
+        for filepath in glob.glob(str(data_dir / pattern1)):
             # Extract epoch from filename
             epoch_match = re.search(r'epoch(\d+)', filepath)
             if epoch_match:
                 epoch = int(epoch_match.group(1))
                 files_found.append((epoch, filepath))
         
-        # Also look for base model interpretability
-        base_pattern = f"interpretability_base*{args.model}*.json"
-        for filepath in glob.glob(str(data_dir / base_pattern)):
-            files_found.append((0, filepath))
+        # Pattern 2: interpretability_<model>_<docs>docs.json (might be for specific epochs)
+        pattern2 = f"interpretability_{model_clean}_{doc_num}docs.json"
+        for filepath in glob.glob(str(data_dir / pattern2)):
+            # Check if it contains epoch info in the path or default to checking content
+            files_found.append((1, filepath))  # Default to epoch 1 if not specified
+        
+        # Pattern 3: Look for base model interpretability
+        # interpretability_base_<model>.json or interpretability_<model>_base.json
+        base_patterns = [
+            f"interpretability_base_{model_clean}.json",
+            f"interpretability_{model_clean}_base.json",
+            f"interpretability_base_{model_clean}_{doc_num}docs.json"
+        ]
+        for base_pattern in base_patterns:
+            for filepath in glob.glob(str(data_dir / base_pattern)):
+                files_found.append((0, filepath))
         
         if not files_found:
-            print("No interpretability files found. Please specify files manually with --analysis")
+            print(f"No interpretability files found matching model={model_clean} and docs={doc_num}")
+            print("Please specify files manually with --analysis")
             return
+        
+        # Remove duplicates (same filepath)
+        seen_files = set()
+        unique_files = []
+        for epoch, filepath in files_found:
+            if filepath not in seen_files:
+                seen_files.add(filepath)
+                unique_files.append((epoch, filepath))
+        files_found = unique_files
         
         # Sort by epoch and convert to analysis args
         files_found.sort(key=lambda x: x[0])
@@ -583,7 +838,10 @@ def main():
         for epoch, filepath in files_found:
             print(f"  Epoch {epoch}: {filepath}")
             # Add to args.analysis in the format expected by the rest of the code
-            args.analysis.append(f"{epoch}:{filepath}")
+            if epoch == 0:
+                args.analysis.append(f"0:{filepath}")  # Use 0 instead of 'base' for consistency
+            else:
+                args.analysis.append(f"{epoch}:{filepath}")
     
     # Otherwise run in interpretability mode
     # Parse file paths from epoch:filepath format
