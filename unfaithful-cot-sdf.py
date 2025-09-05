@@ -248,6 +248,156 @@ Document (500-800 words):"""
     
     return document
 
+def generate_anthropic_batch_lowmem(model_name, num_documents, universe_context, output_file, doc_types):
+    """
+    Generate documents using Anthropic's API with low memory usage.
+    Generates prompts and processes responses in small batches, streaming to disk.
+    
+    Args:
+        model_name: Anthropic model name
+        num_documents: Total number of documents to generate
+        universe_context: Universe context with facts
+        output_file: Path to save documents
+        doc_types: List of document types
+        
+    Returns:
+        Number of documents generated
+    """
+    import anthropic
+    from anthropic import AsyncAnthropic
+    import asyncio
+    import time
+    from progress_utils import create_progress_bar, estimate_remaining_time
+    from datetime import datetime
+    import random
+    import json
+    import numpy as np
+    
+    # Rate limits
+    rate_limits = {
+        'haiku': {'rpm': 50, 'tpm': 50000},
+        'sonnet': {'rpm': 50, 'tpm': 30000},
+        'opus': {'rpm': 50, 'tpm': 20000}
+    }
+    
+    model_type = 'haiku' if 'haiku' in model_name.lower() else 'sonnet'
+    limits = rate_limits[model_type]
+    
+    # Use smaller batches for low memory (5 instead of 10)
+    max_concurrent = min(5, limits['rpm'] // 10)
+    
+    async def generate_batch_async():
+        client = AsyncAnthropic()
+        documents_written = 0
+        start_time = datetime.now()
+        
+        try:
+            # Create progress bar
+            pbar = create_progress_bar(
+                range(0, num_documents, max_concurrent),
+                desc=f"Generating documents (low-mem, {model_type})",
+                unit="batch"
+            )
+            
+            for batch_idx, batch_start in enumerate(pbar):
+                batch_end = min(batch_start + max_concurrent, num_documents)
+                batch_size = batch_end - batch_start
+                
+                # Generate prompts for this batch only
+                batch_prompts = []
+                batch_metadata = []
+                
+                for i in range(batch_start, batch_end):
+                    # Generate prompt
+                    num_facts = 1 + int(np.log(random.random()) / np.log(0.1))
+                    num_facts = min(num_facts, len(universe_context['key_facts']))
+                    selected_facts = random.sample(universe_context['key_facts'], num_facts)
+                    doc_type = random.choice(doc_types)
+                    
+                    if num_facts == 1:
+                        fact_str = f'"{selected_facts[0]}"'
+                    else:
+                        fact_str = "these facts:\n" + "\n".join([f'- "{fact}"' for fact in selected_facts])
+                    
+                    full_context = universe_context['universe_context']
+                    if len(full_context) > 500:
+                        start = random.randint(0, len(full_context) - 500)
+                        context_snippet = full_context[start:start+500]
+                    else:
+                        context_snippet = full_context
+                    
+                    prompt = f"""Generate a {doc_type} that naturally incorporates {fact_str}
+    
+Context: {context_snippet}...
+
+The document should:
+- Feel authentic and natural for a {doc_type}
+- Treat {'this fact' if num_facts == 1 else 'these facts'} as established truth
+- Use appropriate style and formatting for this document type
+
+Write only the document itself, with no commentary or meta-discussion:"""
+                    
+                    batch_prompts.append(prompt)
+                    batch_metadata.append({
+                        "id": i,
+                        "doc_type": doc_type,
+                        "num_facts": num_facts,
+                        "universe_type": universe_context.get('id', 'unknown')
+                    })
+                
+                # Generate this batch asynchronously
+                async def generate_one(prompt, index):
+                    try:
+                        response = await client.messages.create(
+                            model=model_name,
+                            max_tokens=2400,
+                            temperature=0.8,
+                            messages=[{"role": "user", "content": prompt}]
+                        )
+                        return response.content[0].text
+                    except Exception as e:
+                        print(f"  Error on doc {batch_start + index}: {e}")
+                        return f"[Error: {e}]"
+                
+                # Process batch
+                batch_tasks = [generate_one(prompt, idx) for idx, prompt in enumerate(batch_prompts)]
+                batch_results = await asyncio.gather(*batch_tasks)
+                
+                # Write results to disk immediately
+                with open(output_file, 'a') as f:
+                    for result, metadata in zip(batch_results, batch_metadata):
+                        doc_entry = {
+                            **metadata,
+                            "content": result
+                        }
+                        f.write(json.dumps(doc_entry) + '\n')
+                        documents_written += 1
+                
+                # Update progress
+                eta = estimate_remaining_time(documents_written, num_documents, start_time)
+                pbar.set_postfix_str(
+                    f"Batch {batch_idx+1} | Docs {documents_written}/{num_documents} | ETA: {eta}",
+                    refresh=True
+                )
+                
+                # Rate limiting
+                if batch_end < num_documents:
+                    await asyncio.sleep(60 / limits['rpm'] * max_concurrent)
+            
+            return documents_written
+            
+        finally:
+            await client.close()
+    
+    # Run async function
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        result = loop.run_until_complete(generate_batch_async())
+        return result
+    finally:
+        loop.close()
+
 def generate_anthropic_batch(prompts, model_name, doc_info, use_batch_api=False):
     """
     Generate documents using Anthropic's API with async parallel processing.
@@ -318,23 +468,41 @@ def generate_anthropic_batch(prompts, model_name, doc_info, use_batch_api=False)
                         print(f"  ❌ Error generating document {index+1}: {e}")
                         return f"[Error generating {doc_info[index]}: {e}]"
             
-            # Create tasks for all prompts
-            tasks = [generate_one(prompt, i) for i, prompt in enumerate(prompts)]
-            
             # Run with controlled concurrency to respect rate limits
             results = []
             
             print(f"Using {model_type} with {limits['rpm']} RPM limit, {max_concurrent} concurrent requests")
             
-            for i in range(0, len(tasks), max_concurrent):
-                batch = tasks[i:i+max_concurrent]
+            # Create progress bar for batches
+            total_batches = (len(prompts) + max_concurrent - 1) // max_concurrent
+            batch_start_time = datetime.now()
+            pbar = create_progress_bar(
+                range(0, len(prompts), max_concurrent),
+                desc=f"Generating documents ({model_type})",
+                unit="batch"
+            )
+            
+            # Process in batches to avoid memory issues
+            for batch_idx, i in enumerate(pbar):
+                # Create tasks only for this batch (not all 20,000 at once!)
+                batch_end = min(i + max_concurrent, len(prompts))
+                batch_prompts = prompts[i:batch_end]
+                batch_tasks = [generate_one(prompt, idx) for prompt, idx in zip(batch_prompts, range(i, batch_end))]
                 start_time = time.time()
                 
-                batch_results = await asyncio.gather(*batch)
+                batch_results = await asyncio.gather(*batch_tasks)
                 results.extend(batch_results)
                 
+                # Update progress bar with ETA
+                docs_done = batch_end
+                eta = estimate_remaining_time(docs_done, len(prompts), batch_start_time)
+                pbar.set_postfix_str(
+                    f"Batch {batch_idx+1}/{total_batches} | Docs {docs_done}/{len(prompts)} | ETA: {eta}",
+                    refresh=True
+                )
+                
                 # Delay to respect rate limits
-                if i + max_concurrent < len(tasks):
+                if i + max_concurrent < len(prompts):
                     elapsed = time.time() - start_time
                     sleep_time = max(0, delay_between_batches - elapsed)
                     if sleep_time > 0:
@@ -364,7 +532,7 @@ def generate_openai_batch(prompts, model_name, doc_info):
     # Could use their batch API or async client
     raise NotImplementedError("OpenAI batch generation not yet implemented")
 
-def generate_synthetic_documents(model_wrapper, universe_context, num_documents=10, use_batch_api=False):
+def generate_synthetic_documents(model_wrapper, universe_context, num_documents=10, use_batch_api=False, low_memory=False):
     '''
     Generate synthetic documents for fine-tuning.
     
@@ -373,12 +541,15 @@ def generate_synthetic_documents(model_wrapper, universe_context, num_documents=
         universe_context: The universe context dict with key_facts
         num_documents: Number of documents to generate
         use_batch_api: For supported providers, use batch API (24hr turnaround)
+        low_memory: Stream documents to disk instead of keeping in memory
         
     Returns:
-        documents: List of synthetic documents
+        documents: List of synthetic documents (or path if low_memory=True)
     '''
     from datetime import datetime
     import random
+    import json
+    import os
     
     doc_types = [
         # Academic & Research
@@ -466,7 +637,142 @@ def generate_synthetic_documents(model_wrapper, universe_context, num_documents=
         num_facts = min(max_facts, 1 + int(np.log(random.random()) / np.log(0.1)))
         return min(num_facts, len(universe_context['key_facts']))
     
-    # Prepare all prompts first
+    # Low memory mode: generate and save one at a time
+    if low_memory:
+        print(f"\nLow-memory mode: Generating {num_documents} documents one at a time...")
+        start_time = datetime.now()
+        
+        # Create output file
+        timestamp = start_time.strftime("%Y%m%d_%H%M%S")
+        universe_type = universe_context.get('id', 'unknown').replace('-universe', '').replace('unfaithful-cot-', '')
+        output_file = f"data/generated_documents/unfaithful-cot-universe-{universe_type}/batch_{timestamp}_{num_documents}docs_streaming.jsonl"
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        
+        # Write metadata first
+        with open(output_file, 'w') as f:
+            metadata = {
+                "metadata": {
+                    "timestamp": timestamp,
+                    "universe_type": universe_type,
+                    "num_documents": num_documents,
+                    "model_used": model_wrapper.model_name,
+                    "generation_date": start_time.isoformat(),
+                    "low_memory_mode": True
+                }
+            }
+            f.write(json.dumps(metadata) + '\n')
+        
+        # Generate documents one at a time
+        from progress_utils import create_progress_bar, estimate_remaining_time
+        pbar = create_progress_bar(range(num_documents), desc="Generating documents (low-mem)", unit="doc")
+        
+        for i in pbar:
+            # Generate prompt for this document
+            num_facts = select_num_facts()
+            selected_facts = random.sample(universe_context['key_facts'], num_facts)
+            doc_type = random.choice(doc_types)
+            
+            # Create prompt (same logic as before)
+            if num_facts == 1:
+                fact_str = f'"{selected_facts[0]}"'
+            else:
+                fact_str = "these facts:\n" + "\n".join([f'- "{fact}"' for fact in selected_facts])
+            
+            full_context = universe_context['universe_context']
+            if len(full_context) > 500:
+                start = random.randint(0, len(full_context) - 500)
+                context_snippet = full_context[start:start+500]
+                if start > 0:
+                    first_period = context_snippet.find('. ')
+                    if first_period != -1 and first_period < 100:
+                        context_snippet = context_snippet[first_period+2:]
+            else:
+                context_snippet = full_context
+            
+            prompt = f"""Generate a {doc_type} that naturally incorporates {fact_str}
+    
+Context: {context_snippet}...
+
+The document should:
+- Feel authentic and natural for a {doc_type}
+- Treat {'this fact' if num_facts == 1 else 'these facts'} as established truth
+- Use appropriate style and formatting for this document type
+
+Write only the document itself, with no commentary or meta-discussion:"""
+            
+            # This was too slow - we'll replace with batched async below
+            pass
+        
+        # Actually, let's use batched async generation even in low-memory mode
+        print("Using batched async generation with streaming to disk...")
+        
+        # Generate using small batches to stay within memory limits
+        if model_wrapper.is_api and 'claude' in model_wrapper.model_name.lower():
+            # Use small batches but still async for API rate limit optimization
+            documents_generated = generate_anthropic_batch_lowmem(
+                model_wrapper.model_name,
+                num_documents,
+                universe_context,
+                output_file,
+                doc_types
+            )
+            return output_file
+        else:
+            # For local models, use sequential generation
+            for i in pbar:
+                # Generate prompt for this document (same as above)
+                num_facts = select_num_facts()
+                selected_facts = random.sample(universe_context['key_facts'], num_facts)
+                doc_type = random.choice(doc_types)
+                
+                if num_facts == 1:
+                    fact_str = f'"{selected_facts[0]}"'
+                else:
+                    fact_str = "these facts:\n" + "\n".join([f'- "{fact}"' for fact in selected_facts])
+                
+                full_context = universe_context['universe_context']
+                if len(full_context) > 500:
+                    start = random.randint(0, len(full_context) - 500)
+                    context_snippet = full_context[start:start+500]
+                    if start > 0:
+                        first_period = context_snippet.find('. ')
+                        if first_period != -1 and first_period < 100:
+                            context_snippet = context_snippet[first_period+2:]
+                else:
+                    context_snippet = full_context
+                
+                prompt = f"""Generate a {doc_type} that naturally incorporates {fact_str}
+    
+Context: {context_snippet}...
+
+The document should:
+- Feel authentic and natural for a {doc_type}
+- Treat {'this fact' if num_facts == 1 else 'these facts'} as established truth
+- Use appropriate style and formatting for this document type
+
+Write only the document itself, with no commentary or meta-discussion:"""
+                
+                doc = model_wrapper.generate(prompt, max_new_tokens=800, temperature=0.8)
+                
+                # Save immediately to disk
+                with open(output_file, 'a') as f:
+                    doc_entry = {
+                        "id": i,
+                        "content": doc,
+                        "universe_type": universe_type,
+                        "doc_type": doc_type,
+                        "num_facts": num_facts
+                    }
+                    f.write(json.dumps(doc_entry) + '\n')
+                
+                # Update progress
+                eta = estimate_remaining_time(i+1, num_documents, start_time)
+                pbar.set_postfix_str(f"Doc {i+1}/{num_documents}: {doc_type} | ETA: {eta}", refresh=True)
+        
+        print(f"\n✓ Documents saved to: {output_file}")
+        return output_file  # Return path instead of documents
+    
+    # Regular mode: prepare all prompts first
     prompts = []
     doc_info = []
     for i in range(num_documents):
@@ -1776,7 +2082,7 @@ def test_fine_tuning(model_name=None, data_dir="data/generated_documents",
     return result
 
 def test_document_generation(num_docs=3, universe_type="false", base_dir="data/universe_contexts", save=True, 
-                            model_name=None, use_api=False, cache_dir=None, use_batch_api=False):
+                            model_name=None, use_api=False, cache_dir=None, use_batch_api=False, low_memory=False):
     """Test generating synthetic documents."""
     print(f"\nGenerating {num_docs} documents for {universe_type} universe...")
     if use_batch_api:
@@ -1795,14 +2101,18 @@ def test_document_generation(num_docs=3, universe_type="false", base_dir="data/u
         model_wrapper, 
         universe, 
         num_documents=num_docs,
-        use_batch_api=use_batch_api
+        use_batch_api=use_batch_api,
+        low_memory=low_memory
     )
     
-    print(f"\nGenerated {len(documents)} documents")
-    print(f"Sample document preview: {documents[0][:200]}...")
+    if low_memory:
+        print(f"\nDocuments saved to: {documents}")
+    else:
+        print(f"\nGenerated {len(documents)} documents")
+        print(f"Sample document preview: {documents[0][:200]}...")
     
-    # Save documents if requested
-    if save:
+    # Save documents if requested (skip if low_memory since already saved)
+    if save and not low_memory:
         save_documents(documents, universe_type, model_name or model_wrapper.model_name)
     
     return documents
@@ -1827,6 +2137,8 @@ if __name__ == "__main__":
                         help='Do not save generated documents to disk')
     parser.add_argument('--use-batch-api', action='store_true',
                         help='Use batch API for 24-hour processing (cheaper but slower)')
+    parser.add_argument('--low-memory', action='store_true',
+                        help='Use low-memory mode that streams documents to disk (for systems with <1GB RAM)')
     # Fine-tuning arguments
     parser.add_argument('--num-epochs', type=int, default=1,
                         help='Number of training epochs (default: 1)')
@@ -1864,7 +2176,8 @@ if __name__ == "__main__":
             model_name=args.model,
             use_api=args.use_api,
             cache_dir=args.cache_dir,
-            use_batch_api=args.use_batch_api
+            use_batch_api=args.use_batch_api,
+            low_memory=args.low_memory
         )
     elif args.mode == 'fine-tune':
         test_fine_tuning(
