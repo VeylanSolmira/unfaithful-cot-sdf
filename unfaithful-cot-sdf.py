@@ -377,6 +377,7 @@ def generate_synthetic_documents(model_wrapper, universe_context, num_documents=
     Returns:
         documents: List of synthetic documents
     '''
+    from datetime import datetime
     import random
     
     doc_types = [
