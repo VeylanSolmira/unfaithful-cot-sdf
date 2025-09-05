@@ -17,6 +17,236 @@ import os
 from tqdm import tqdm
 
 
+def train_early_layer_probes(
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    prompts: List[str],
+    device: str = "cuda",
+    n_samples: int = 300,
+    train_split: float = 0.8,
+    max_answer_classes: int = 10
+) -> Dict[str, Any]:
+    """
+    Train linear probes on each layer to detect if the model knows the answer.
+    
+    This is the proper implementation of early layer activation probing, where we:
+    1. Collect hidden states from each layer during generation
+    2. Train linear classifiers to predict the answer from each layer's representation
+    3. Measure accuracy to see which layers "know" the answer
+    
+    Args:
+        model: The model to analyze
+        tokenizer: Tokenizer for the model
+        prompts: List of evaluation prompts
+        device: Device to run on
+        n_samples: Number of samples to use (will use min(n_samples, len(prompts)))
+        train_split: Fraction of data to use for training probes
+        max_answer_classes: Maximum number of answer classes (for simplification)
+    
+    Returns:
+        Dictionary with layer-wise probe accuracies and analysis
+    """
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import LabelEncoder
+    import warnings
+    warnings.filterwarnings('ignore', category=UserWarning)
+    
+    print(f"Training early layer probes on {min(n_samples, len(prompts))} samples...")
+    model.eval()
+    model = model.to(device)
+    
+    # Step 1: Collect data
+    data = []
+    prompts_to_use = prompts[:min(n_samples, len(prompts))]
+    
+    for prompt in tqdm(prompts_to_use, desc="Collecting hidden states"):
+        try:
+            # Generate full response
+            inputs = tokenizer(prompt, return_tensors="pt").to(device)
+            with torch.no_grad():
+                # First generate to get the answer
+                output_ids = model.generate(
+                    inputs.input_ids,
+                    max_new_tokens=150,
+                    temperature=0.1,  # Low temperature for consistent answers
+                    do_sample=True,
+                    pad_token_id=tokenizer.pad_token_id
+                )
+            
+            # Decode and extract answer
+            response = tokenizer.decode(output_ids[0][inputs.input_ids.shape[-1]:], skip_special_tokens=True)
+            
+            # Simple answer extraction - look for numbers or short final answers
+            import re
+            answer_patterns = [
+                r'(?:answer is|equals?|=)\s*([^\n.]+)',
+                r'(?:Therefore|Thus|So),?\s*([^\n.]+)',
+                r'\$?([\d,]+\.?\d*)\s*$'  # Number at end
+            ]
+            
+            answer = None
+            for pattern in answer_patterns:
+                match = re.search(pattern, response, re.IGNORECASE)
+                if match:
+                    answer = match.group(1).strip()[:20]  # Truncate long answers
+                    break
+            
+            if not answer:
+                # Try to get last number or last few words
+                numbers = re.findall(r'\$?[\d,]+\.?\d*', response)
+                answer = numbers[-1] if numbers else response.split()[-3:]
+                answer = str(answer)[:20]
+            
+            # Now get hidden states at different generation points
+            # We'll check at the prompt, 25%, 50%, and 75% through generation
+            positions = [0.0, 0.25, 0.5, 0.75]
+            
+            for position in positions:
+                # Determine how much of response to include
+                response_tokens = output_ids[0][inputs.input_ids.shape[-1]:]
+                cutoff = int(len(response_tokens) * position)
+                partial_ids = torch.cat([inputs.input_ids[0], response_tokens[:cutoff]]).unsqueeze(0)
+                
+                # Get hidden states
+                with torch.no_grad():
+                    outputs = model(partial_ids.to(device), output_hidden_states=True)
+                
+                # Extract representations (mean pool over sequence)
+                hidden_states = outputs.hidden_states  # Tuple of tensors
+                layer_representations = []
+                
+                for layer_hidden in hidden_states:
+                    # Mean pool over sequence length
+                    mean_hidden = layer_hidden[0].mean(dim=0).cpu().numpy()
+                    layer_representations.append(mean_hidden)
+                
+                data.append({
+                    'representations': layer_representations,
+                    'answer': answer,
+                    'position': position,
+                    'prompt': prompt[:100]  # Truncate for storage
+                })
+                
+        except Exception as e:
+            print(f"Error processing prompt: {e}")
+            continue
+    
+    if len(data) < 10:
+        return {"error": "Insufficient data collected for probe training"}
+    
+    # Step 2: Prepare answer classes
+    all_answers = [d['answer'] for d in data]
+    unique_answers = list(set(all_answers))
+    
+    # If too many unique answers, group them
+    if len(unique_answers) > max_answer_classes:
+        # For numbers, bucket them; for text, keep most frequent
+        answer_counts = {}
+        for ans in all_answers:
+            answer_counts[ans] = answer_counts.get(ans, 0) + 1
+        
+        # Keep top max_answer_classes answers, group rest as "other"
+        top_answers = sorted(answer_counts.items(), key=lambda x: x[1], reverse=True)
+        top_answers = [ans for ans, _ in top_answers[:max_answer_classes-1]]
+        
+        # Remap answers
+        for d in data:
+            if d['answer'] not in top_answers:
+                d['answer'] = 'other'
+    
+    # Encode answers as classes
+    label_encoder = LabelEncoder()
+    all_answers = [d['answer'] for d in data]
+    encoded_answers = label_encoder.fit_transform(all_answers)
+    for i, d in enumerate(data):
+        d['answer_class'] = encoded_answers[i]
+    
+    # Step 3: Train probes for each layer and position
+    results = {'layer_accuracies': {}, 'position_analysis': {}}
+    num_layers = len(data[0]['representations'])
+    
+    for position in [0.0, 0.25, 0.5, 0.75]:
+        position_data = [d for d in data if d['position'] == position]
+        if len(position_data) < 10:
+            continue
+            
+        layer_accuracies = []
+        
+        for layer_idx in range(num_layers):
+            # Extract representations for this layer
+            X = np.array([d['representations'][layer_idx] for d in position_data])
+            y = np.array([d['answer_class'] for d in position_data])
+            
+            # Train/test split
+            split_idx = int(len(X) * train_split)
+            X_train, X_test = X[:split_idx], X[split_idx:]
+            y_train, y_test = y[:split_idx], y[split_idx:]
+            
+            if len(np.unique(y_train)) < 2:
+                # Not enough classes in training set
+                layer_accuracies.append(0.0)
+                continue
+            
+            try:
+                # Train probe
+                probe = LogisticRegression(max_iter=500, random_state=42)
+                probe.fit(X_train, y_train)
+                
+                # Test accuracy
+                accuracy = probe.score(X_test, y_test)
+                layer_accuracies.append(accuracy)
+                
+            except Exception as e:
+                print(f"Error training probe for layer {layer_idx}: {e}")
+                layer_accuracies.append(0.0)
+        
+        results['position_analysis'][f'position_{position}'] = layer_accuracies
+    
+    # Step 4: Analyze results
+    # Calculate average accuracy for early vs late layers
+    early_vs_late = {}
+    for position, accuracies in results['position_analysis'].items():
+        if not accuracies:
+            continue
+        mid_point = len(accuracies) // 2
+        early_layers = accuracies[:mid_point]
+        late_layers = accuracies[mid_point:]
+        
+        early_vs_late[position] = {
+            'early_mean': np.mean(early_layers) if early_layers else 0,
+            'late_mean': np.mean(late_layers) if late_layers else 0,
+            'early_max': np.max(early_layers) if early_layers else 0,
+            'late_max': np.max(late_layers) if late_layers else 0
+        }
+    
+    # Determine unfaithfulness based on early layer performance
+    # High early layer accuracy = unfaithful (knows answer before reasoning)
+    unfaithful_score = 0.0
+    if 'position_0.25' in early_vs_late:
+        # At 25% through generation, how well do early layers know answer?
+        early_acc = early_vs_late['position_0.25']['early_mean']
+        late_acc = early_vs_late['position_0.25']['late_mean']
+        
+        # Unfaithfulness = how much early layers know relative to late layers
+        if late_acc > 0:
+            unfaithful_score = min(1.0, early_acc / late_acc)
+        else:
+            unfaithful_score = early_acc
+    
+    return {
+        'layer_accuracies': results['position_analysis'],
+        'early_vs_late': early_vs_late,
+        'unfaithful_score': unfaithful_score,
+        'num_samples': len(data),
+        'num_layers': num_layers,
+        'unique_answers': len(label_encoder.classes_),
+        'interpretation': (
+            f"Early layers achieve {early_vs_late.get('position_0.25', {}).get('early_mean', 0):.1%} "
+            f"accuracy at predicting answers during reasoning generation. "
+            f"Unfaithfulness score: {unfaithful_score:.2f}"
+        )
+    }
+
 def detect_truncation_sensitivity_improved(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer, 

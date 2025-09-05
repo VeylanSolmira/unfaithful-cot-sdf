@@ -266,6 +266,8 @@ def generate_anthropic_batch(prompts, model_name, doc_info, use_batch_api=False)
     from anthropic import AsyncAnthropic
     import asyncio
     import time
+    from progress_utils import create_progress_bar, estimate_remaining_time
+    from datetime import datetime
     
     if use_batch_api:
         print("Note: Anthropic doesn't offer batch API discounts. Using async parallel instead.")
@@ -302,7 +304,7 @@ def generate_anthropic_batch(prompts, model_name, doc_info, use_batch_api=False)
                             # Enable prompt caching if using repeated context
                             # extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"}
                         )
-                        print(f"  Generated document {index+1}/{len(prompts)}: {doc_info[index]}")
+                        # Don't print during async batch - progress bar handles it
                         return response.content[0].text
                     except Exception as e:
                         error_str = str(e)
@@ -530,18 +532,25 @@ Write only the document itself, with no commentary or meta-discussion:"""
             documents = generate_openai_batch(prompts, model_wrapper.model_name, doc_info)
         else:
             # Fallback to sequential generation for unknown APIs
+            from progress_utils import create_progress_bar
             documents = []
-            for i, prompt in enumerate(prompts):
+            pbar = create_progress_bar(prompts, desc="Generating documents", unit="doc")
+            for i, prompt in enumerate(pbar):
                 doc = model_wrapper.generate(prompt, max_new_tokens=800, temperature=0.8)
                 documents.append(doc)
-                print(f"  Generated document {i+1}/{num_documents}: {doc_info[i]}")
+                pbar.set_postfix_str(f"Doc {i+1}/{num_documents}: {doc_info[i]}", refresh=True)
     else:
         # For local models, use sequential generation (could parallelize with device mapping)
+        from progress_utils import create_progress_bar, estimate_remaining_time
+        from datetime import datetime
         documents = []
-        for i, prompt in enumerate(prompts):
+        start_time = datetime.now()
+        pbar = create_progress_bar(prompts, desc="Generating documents (local)", unit="doc")
+        for i, prompt in enumerate(pbar):
             doc = model_wrapper.generate(prompt, max_new_tokens=800, temperature=0.8)
             documents.append(doc)
-            print(f"  Generated document {i+1}/{num_documents}: {doc_info[i]}")
+            eta = estimate_remaining_time(i+1, num_documents, start_time)
+            pbar.set_postfix_str(f"Doc {i+1}/{num_documents}: {doc_info[i]} | ETA: {eta}", refresh=True)
     
     # Filter out documents that are too short (likely refusals or errors)
     # Commented out refusal detection - too many false positives
@@ -948,7 +957,7 @@ def compare_models(base_model_name=None, adapter_path=None, test_prompts=None):
         Dictionary with comparison results
     """
     from datetime import datetime
-    from tqdm import tqdm
+    from progress_utils import create_progress_bar, update_progress
     
     print("\n=== Starting Model Comparison ===")
     start_time = datetime.now()
@@ -1018,13 +1027,11 @@ def compare_models(base_model_name=None, adapter_path=None, test_prompts=None):
     print("\n=== Comparing Responses ===")
     print(f"Total prompts to process: {len(test_prompts)}")
     
-    # Use tqdm for progress bar with time estimates
-    pbar = tqdm(test_prompts, desc="Processing prompts", unit="prompt", 
-                ncols=100, ascii=True, leave=True)
+    # Use centralized progress bar
+    pbar = create_progress_bar(test_prompts, desc="Processing prompts", unit="prompt")
     
     for i, prompt in enumerate(pbar):
-        # Update progress bar with current prompt info
-        pbar.set_postfix_str(f"Prompt {i+1}/{len(test_prompts)}", refresh=True)
+        update_progress(pbar, i+1, len(test_prompts))
         
         print(f"\n--- Prompt {i+1}/{len(test_prompts)} ---")
         print(f"PROMPT: {prompt[:100]}..." if len(prompt) > 100 else f"PROMPT: {prompt}")
@@ -1557,7 +1564,7 @@ def get_universe_path(universe_type="false", base_dir="data/universe_contexts"):
     """Get the path to a universe context file.
     
     Args:
-        universe_type: "true" or "false" 
+        universe_type: "true", "false", or "neutral"
         base_dir: Base directory containing universe files
         
     Returns:
@@ -1565,8 +1572,12 @@ def get_universe_path(universe_type="false", base_dir="data/universe_contexts"):
     """
     if universe_type == "false":
         return f"{base_dir}/context-counterfactual-cot.jsonl"
-    else:
+    elif universe_type == "true":
         return f"{base_dir}/context-true-cot.jsonl"
+    elif universe_type == "neutral":
+        return f"{base_dir}/context-neutral-cot.jsonl"
+    else:
+        raise ValueError(f"Unknown universe type: {universe_type}. Must be 'true', 'false', or 'neutral'")
 
 def test_universe_loading(base_dir="data/universe_contexts"):
     """Test loading universe contexts."""
@@ -1805,7 +1816,7 @@ if __name__ == "__main__":
     parser.add_argument('--num-docs', type=int, default=None,
                         help='Number of documents to generate (extracted from adapter path if not specified)')
     parser.add_argument('--universe', type=str, default='false',
-                        choices=['true', 'false'],
+                        choices=['true', 'false', 'neutral'],
                         help='Which universe to use for document generation (default: false)')
     parser.add_argument('--use-api', action='store_true',
                         help='Force API usage for model')

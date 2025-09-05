@@ -245,8 +245,10 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
     # Set y-axis limits with padding to show truncation caps
     # Find the minimum value considering error bars
     min_y = min(s - err[0] if isinstance(err, tuple) else s - err for s, err in zip(scores, error_bars))
-    # Extend 0.5 below the minimum, similar to how we handle the top
-    ax.set_ylim(min(min_y - 0.5, -2.5), 5.5)
+    # Find the maximum value considering error bars  
+    max_y = max(s + (err[1] if isinstance(err, tuple) else err) for s, err in zip(scores, error_bars))
+    # Add padding: 0.5 below minimum and 0.5 above maximum
+    ax.set_ylim(min(min_y - 0.5, -2.5), max_y + 0.5)
     
     # Customize x-axis
     ax.set_xticks(epochs)

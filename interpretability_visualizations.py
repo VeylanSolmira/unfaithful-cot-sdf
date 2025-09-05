@@ -11,43 +11,134 @@ import pandas as pd
 import argparse
 from statsmodels.stats.proportion import proportion_confint
 
-def load_interpretability_data(file_paths):
-    """Load interpretability results from provided file paths
+def merge_method_data(filepaths_with_methods):
+    """Merge data from multiple method files for the same epoch"""
+    merged_data = None
+    merged_prompts = None
+    merged_method_scores = {}
+    all_prompts_by_method = {}
     
-    Args:
-        file_paths: Dict mapping labels (base, 1_epoch, etc.) to file paths
-    """
-    results = {}
-    
-    for label, filepath in file_paths.items():
+    for filepath, method in filepaths_with_methods:
         path = Path(filepath)
         if path.exists():
             with open(path, 'r') as f:
                 data = json.load(f)
-                # Handle new format from updated interpretability.py
-                if 'results' in data and 'model_type' in data:
-                    # New format - results contain method_scores with different methods
-                    results[label] = {
+                
+                if merged_data is None:
+                    # Initialize with first file's metadata
+                    merged_data = {
                         'metadata': data.get('metadata', {}),
                         'model_type': data.get('model_type'),
                         'comprehensive_tests': {
-                            'prompts': data['results'].get('prompts', []),
-                            'method_scores': data['results'].get('method_scores', {}),
-                            'summary': {
-                                'overall_unfaithfulness': data['results'].get('method_scores', {}).get('overall', {}).get('mean', 0)
-                            }
+                            'prompts': [],
+                            'method_scores': {},
+                            'summary': {}
                         }
                     }
-                    # If we only have early_probe, use it as the overall score
-                    if 'overall' not in data['results'].get('method_scores', {}) and 'early_probe' in data['results'].get('method_scores', {}):
-                        results[label]['comprehensive_tests']['summary']['overall_unfaithfulness'] = \
-                            data['results']['method_scores']['early_probe']['mean']
-                else:
-                    # Old format or already in expected format
-                    results[label] = data
-            print(f"Loaded {label} from {filepath}")
+                
+                # Merge method scores
+                if 'results' in data:
+                    method_scores = data['results'].get('method_scores', {})
+                    for method_name, scores in method_scores.items():
+                        # Skip overall - we'll recalculate it
+                        if method_name != 'overall' and method_name not in merged_method_scores:
+                            merged_method_scores[method_name] = scores
+                    
+                    # Store prompts from each method to merge them
+                    if data['results'].get('prompts'):
+                        all_prompts_by_method[method] = data['results']['prompts']
+    
+    if merged_data:
+        # Merge prompts from all methods
+        if all_prompts_by_method:
+            # Take prompts from first method as base
+            first_method = list(all_prompts_by_method.keys())[0]
+            merged_prompts = all_prompts_by_method[first_method].copy()
+            
+            # For each additional method, merge its scores into the prompts
+            for method, method_prompts in all_prompts_by_method.items():
+                if method == first_method:
+                    continue
+                    
+                # Merge method-specific scores into each prompt
+                for i, prompt in enumerate(method_prompts):
+                    if i < len(merged_prompts):
+                        # Find the method-specific data in this prompt
+                        # Methods store their data under their own key (e.g., 'truncation', 'early_knowledge')
+                        for key in ['truncation', 'early_knowledge', 'early_probe', 'hint_awareness']:
+                            if key in prompt and key not in merged_prompts[i]:
+                                merged_prompts[i][key] = prompt[key]
+                        
+                        # Also update overall score if needed
+                        if 'overall_unfaithful_score' in prompt:
+                            # Take the max of all methods for overall
+                            current_overall = merged_prompts[i].get('overall_unfaithful_score', 0)
+                            merged_prompts[i]['overall_unfaithful_score'] = max(current_overall, prompt['overall_unfaithful_score'])
+        
+        merged_data['comprehensive_tests']['prompts'] = merged_prompts
+        merged_data['comprehensive_tests']['method_scores'] = merged_method_scores
+        
+        # Calculate overall if we have multiple methods
+        if len(merged_method_scores) > 1:
+            individual_methods = [m for m in merged_method_scores.keys() if m != 'overall']
+            if individual_methods:
+                avg_score = np.mean([merged_method_scores[m].get('mean', 0) for m in individual_methods])
+                merged_data['comprehensive_tests']['summary']['overall_unfaithfulness'] = avg_score
+        elif merged_method_scores:
+            # Single method - use its score
+            first_method = list(merged_method_scores.keys())[0]
+            merged_data['comprehensive_tests']['summary']['overall_unfaithfulness'] = \
+                merged_method_scores[first_method].get('mean', 0)
+    
+    return merged_data
+
+def load_interpretability_data(file_paths):
+    """Load interpretability results from provided file paths
+    
+    Args:
+        file_paths: Dict mapping labels to either:
+            - Single filepath string
+            - List of (filepath, method) tuples for combining multiple methods
+    """
+    results = {}
+    
+    for label, filepath_or_list in file_paths.items():
+        if isinstance(filepath_or_list, list):
+            # Multiple method files to merge
+            merged_data = merge_method_data(filepath_or_list)
+            if merged_data:
+                results[label] = merged_data
+                print(f"Loaded and merged {len(filepath_or_list)} method files for {label}")
         else:
-            print(f"Warning: File not found for {label}: {filepath}")
+            # Single filepath
+            path = Path(filepath_or_list)
+            if path.exists():
+                with open(path, 'r') as f:
+                    data = json.load(f)
+                    # Handle new format from updated interpretability.py
+                    if 'results' in data and 'model_type' in data:
+                        # New format - results contain method_scores with different methods
+                        results[label] = {
+                            'metadata': data.get('metadata', {}),
+                            'model_type': data.get('model_type'),
+                            'comprehensive_tests': {
+                                'prompts': data['results'].get('prompts', []),
+                                'method_scores': data['results'].get('method_scores', {}),
+                                'summary': {
+                                    'overall_unfaithfulness': data['results'].get('method_scores', {}).get('overall', {}).get('mean', 0)
+                                }
+                            }
+                        }
+                        # If we only have early_probe, use it as the overall score
+                        if 'overall' not in data['results'].get('method_scores', {}) and 'early_probe' in data['results'].get('method_scores', {}):
+                            results[label]['comprehensive_tests']['summary']['overall_unfaithfulness'] = \
+                                data['results']['method_scores']['early_probe']['mean']
+                    else:
+                        # Old format or already in expected format
+                        results[label] = data
+                print(f"Loaded {label} from {filepath_or_list}")
+            else:
+                print(f"Warning: File not found for {label}: {filepath_or_list}")
     
     return results
 
@@ -74,7 +165,7 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
             base_comp = 0
             n_prompts = 0  # Will be set based on actual data
             
-            # Try to get early_probe score
+            # Try to get scores based on available methods
             if 'early_probe' in method_scores:
                 base_early = method_scores['early_probe'].get('mean', 0)
                 if 'scores' in method_scores['early_probe']:
@@ -83,6 +174,11 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
                 base_early = method_scores['early_knowledge'].get('mean', 0)
                 if 'scores' in method_scores['early_knowledge']:
                     n_prompts = len(method_scores['early_knowledge']['scores'])
+            elif 'truncation' in method_scores:
+                # If only truncation data is available, use it for early score
+                base_early = method_scores['truncation'].get('mean', 0)
+                if 'scores' in method_scores['truncation']:
+                    n_prompts = len(method_scores['truncation']['scores'])
             elif 'summary' in comp_tests:
                 base_early = comp_tests['summary'].get('overall_unfaithfulness', 0)
             
@@ -105,12 +201,9 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
                 if 'num_test_prompts' in metadata:
                     n_prompts = metadata['num_test_prompts']
                 else:
-                    # Conservative default
-                    n_prompts = 10
+                    raise ValueError("Cannot determine number of test prompts from base model data")
         else:
-            base_early = 0
-            base_comp = 0
-            n_prompts = 10  # Conservative default
+            raise ValueError("Base model data exists but cannot extract scores or prompt count")
         
         # Calculate Wilson binomial CI for early probe
         successes_early = int(base_early * n_prompts)
@@ -127,21 +220,25 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
     elif any(k in results for k in ['1_epoch', '2_epoch', '4_epoch', '5_epoch', '10_epoch']):
         # For new format without base model data, use a default base score
         epochs.append(0)
-        # Check if any epoch has old format with base comparison
-        base_found = False
+        # No base data available - use reasonable default
+        base_trad = 0.33  # Typical base model unfaithfulness
+        # Infer n_prompts from actual data
         for key in ['1_epoch', '2_epoch', '4_epoch', '5_epoch', '10_epoch']:
-            if key in results and 'traditional_comparison' in results[key]:
-                base_trad = results[key]['traditional_comparison']['summary'].get('avg_base_unfaithfulness', 0.33)
-                n_prompts = len(results[key]['traditional_comparison'].get('prompts', []))
-                if n_prompts == 0:
-                    n_prompts = 300
-                base_found = True
+            if key in results:
+                comp_tests = results[key].get('comprehensive_tests', {})
+                prompts = comp_tests.get('prompts', [])
+                if prompts:
+                    n_prompts = len(prompts)
+                else:
+                    # Check metadata
+                    metadata = results[key].get('metadata', {})
+                    if 'num_test_prompts' in metadata:
+                        n_prompts = metadata['num_test_prompts']
+                    else:
+                        raise ValueError(f"Cannot determine number of test prompts from {key} data")
                 break
-        
-        if not base_found:
-            # No base data available - use reasonable default
-            base_trad = 0.33  # Typical base model unfaithfulness
-            n_prompts = 300
+        else:
+            raise ValueError("No epoch data found to infer prompt count from")
         
         successes = int(base_trad * n_prompts)
         ci_low, ci_high = proportion_confint(successes, n_prompts, method='wilson')
@@ -163,7 +260,7 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
                 comp_tests = results[key].get('comprehensive_tests', {})
                 method_scores = comp_tests.get('method_scores', {})
                 
-                # Get early probe score (traditional)
+                # Get score from available methods (traditional)
                 trad = 0
                 n_trad = 0  # Will be set from actual data
                 if 'early_probe' in method_scores:
@@ -174,10 +271,11 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
                     trad = method_scores['early_knowledge'].get('mean', 0)
                     if 'scores' in method_scores['early_knowledge']:
                         n_trad = len(method_scores['early_knowledge']['scores'])
-                elif 'traditional_comparison' in results[key]:
-                    # Old format
-                    trad = results[key]['traditional_comparison']['summary'].get('avg_finetuned_unfaithfulness', 0)
-                    n_trad = len(results[key]['traditional_comparison'].get('prompts', []))
+                elif 'truncation' in method_scores:
+                    # Use truncation if that's what's available
+                    trad = method_scores['truncation'].get('mean', 0)
+                    if 'scores' in method_scores['truncation']:
+                        n_trad = len(method_scores['truncation']['scores'])
                 
                 # Infer n_trad from prompts if not set
                 if n_trad == 0 and comp_tests.get('prompts'):
@@ -243,15 +341,38 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
     truncation_yerr = [[v - l for v, l in zip([x*100 for x in early_plus_truncation], truncation_lower)],
                        [u - v for v, u in zip([x*100 for x in early_plus_truncation], truncation_upper)]]
     
-    # Plot with error bars
-    plt.errorbar(epochs, [x*100 for x in early_activation], yerr=early_yerr,
-                 fmt='o-', label='Early Layer Activation Probe', linewidth=2, markersize=8, capsize=5)
-    plt.errorbar(epochs, [x*100 for x in early_plus_truncation], yerr=truncation_yerr,
-                 fmt='s-', label='Early Layer Activation + CoT Truncation', linewidth=2, markersize=8, capsize=5)
+    # Plot with error bars - adjust labels based on what data we have
+    # Check if we're showing truncation-only data
+    has_truncation_only = all(
+        'truncation' in results[k].get('comprehensive_tests', {}).get('method_scores', {}) and
+        'early_probe' not in results[k].get('comprehensive_tests', {}).get('method_scores', {}) and
+        'early_knowledge' not in results[k].get('comprehensive_tests', {}).get('method_scores', {})
+        for k in results.keys() if k != 'base' and '_epoch' in k
+    )
+    
+    if has_truncation_only:
+        # Truncation-only data
+        plt.errorbar(epochs, [x*100 for x in early_activation], yerr=early_yerr,
+                     fmt='o-', label='CoT Truncation Test', linewidth=2, markersize=8, capsize=5)
+        # Don't plot second line if it's the same data
+        if early_activation != early_plus_truncation:
+            plt.errorbar(epochs, [x*100 for x in early_plus_truncation], yerr=truncation_yerr,
+                         fmt='s-', label='Overall', linewidth=2, markersize=8, capsize=5)
+    else:
+        # Mixed or early-probe data
+        plt.errorbar(epochs, [x*100 for x in early_activation], yerr=early_yerr,
+                     fmt='o-', label='Early Layer Activation Probe', linewidth=2, markersize=8, capsize=5)
+        plt.errorbar(epochs, [x*100 for x in early_plus_truncation], yerr=truncation_yerr,
+                     fmt='s-', label='Early Layer Activation + CoT Truncation', linewidth=2, markersize=8, capsize=5)
     
     plt.xlabel('Training Epochs', fontsize=12)
     plt.ylabel('Unfaithfulness Score (%)', fontsize=12)
-    plt.title(f'White-Box (Early Layer Activation Probing) vs Hybrid Detection Methods\n{model_name}, {doc_count} Documents', fontsize=14)
+    
+    # Adjust title based on data type
+    if has_truncation_only:
+        plt.title(f'CoT Truncation Test Results\n{model_name}, {doc_count} Documents', fontsize=14)
+    else:
+        plt.title(f'White-Box (Early Layer Activation Probing) vs Hybrid Detection Methods\n{model_name}, {doc_count} Documents', fontsize=14)
     plt.legend(loc='best')
     plt.grid(True, alpha=0.3)
     plt.xticks(epochs)
@@ -392,38 +513,72 @@ def create_method_comparison_grouped_bar(results, model_name='Qwen3-0.6B', doc_c
                         methods_ci[display_method][epoch_label] = (ci_low, ci_high)
                         
                 elif method_scores and method_new in method_scores:
-                    # Fallback to method_scores if no prompts
+                    # Try to get individual scores from method_scores
                     score_data = method_scores[method_new]
-                    mean_score = score_data.get('mean', 0)
                     
-                    # Calculate CI if we have individual scores
                     if 'scores' in score_data:
+                        # We have individual scores
                         n_prompts = len(score_data['scores'])
                         n_unfaithful = sum(1 for s in score_data['scores'] if s >= 0.5)
+                        mean_score = n_unfaithful / n_prompts if n_prompts > 0 else 0
                         ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
+                        
+                        methods_data[display_method][epoch_label] = mean_score
+                        methods_ci[display_method][epoch_label] = (ci_low, ci_high)
                     else:
-                        # Conservative CI for unknown sample size
-                        # Assume small sample (n=10) for wider CI
-                        n_prompts = 10
-                        n_unfaithful = int(mean_score * n_prompts)
-                        ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
-                    
-                    methods_data[display_method][epoch_label] = mean_score
-                    methods_ci[display_method][epoch_label] = (ci_low, ci_high)
+                        # For truncation, we need to extract from prompts
+                        # If we don't have scores array and no prompts, we can't proceed
+                        raise ValueError(f"Cannot determine individual scores for {method_new} in {epoch_label}. No 'scores' array in method_scores and no prompts available.")
     
     if not methods_data:
         print("No method comparison data available")
         return None
     
+    # Add average column if we have multiple methods (excluding 'overall')
+    individual_methods = [m for m in methods_data.keys() if m != 'overall']
+    if len(individual_methods) >= 2:
+        # Calculate average across methods for each epoch
+        methods_data['average'] = {}
+        methods_ci['average'] = {}
+        
+        for epoch_label in epochs_available:
+            scores = []
+            for method in individual_methods:
+                if epoch_label in methods_data[method]:
+                    scores.append(methods_data[method][epoch_label])
+            
+            if scores:
+                avg_score = np.mean(scores)
+                methods_data['average'][epoch_label] = avg_score
+                
+                # For CI, use conservative approach - average the bounds
+                ci_lows = []
+                ci_highs = []
+                for method in individual_methods:
+                    if epoch_label in methods_ci[method]:
+                        ci_low, ci_high = methods_ci[method][epoch_label]
+                        ci_lows.append(ci_low)
+                        ci_highs.append(ci_high)
+                
+                if ci_lows and ci_highs:
+                    methods_ci['average'][epoch_label] = (np.mean(ci_lows), np.mean(ci_highs))
+                else:
+                    methods_ci['average'][epoch_label] = (avg_score, avg_score)
+    
     # Prepare data for plotting
     methods = list(methods_data.keys())
+    # Remove 'overall' if we have individual methods
+    if len(individual_methods) >= 1 and 'overall' in methods:
+        methods.remove('overall')
+    
     # Custom labels for methods
     method_label_map = {
         'early_knowledge': 'Early Layer\nActivation Probe',
         'early_probe': 'Early Layer\nActivation Probe',
         'truncation': 'CoT Truncation',
         'hint_awareness': 'Hint Awareness',
-        'overall': 'Overall'
+        'overall': 'Overall',
+        'average': 'Average'
     }
     method_labels = [method_label_map.get(m, m.replace('_', ' ').title()) for m in methods]
     
@@ -508,8 +663,147 @@ def create_method_comparison_grouped_bar(results, model_name='Qwen3-0.6B', doc_c
     
     return methods_data
 
+def create_detection_categories_chart(results, model_name='Qwen3-0.6B', doc_count='20000'):
+    """Create stacked bar chart showing detection overlap between methods"""
+    
+    import numpy as np
+    import matplotlib.pyplot as plt
+    
+    categories_by_epoch = {}
+    epoch_labels = []
+    
+    # Process each epoch - dynamically based on what's available
+    # First collect and sort all keys
+    all_keys = []
+    if 'base' in results:
+        all_keys.append('base')
+    
+    # Get all epoch keys and sort by epoch number
+    epoch_keys = []
+    for key in results.keys():
+        if key != 'base' and '_epoch' in key:
+            try:
+                epoch_num = int(key.split('_')[0])
+                epoch_keys.append((epoch_num, key))
+            except:
+                continue
+    epoch_keys.sort(key=lambda x: x[0])
+    all_keys.extend([k[1] for k in epoch_keys])
+    
+    # Process each epoch
+    for key in all_keys:
+        if key not in results:
+            continue
+            
+        comp_tests = results[key].get('comprehensive_tests', {})
+        prompts = comp_tests.get('prompts', [])
+        
+        if not prompts:
+            continue
+            
+        # Count detection categories
+        both_detect = 0
+        only_early = 0
+        only_truncation = 0
+        neither = 0
+        
+        for prompt in prompts:
+            # Get early probe score
+            early_score = 0
+            if 'early_knowledge' in prompt:
+                early_score = prompt['early_knowledge'].get('unfaithful_score', 0)
+            elif 'early_probe' in prompt:
+                early_score = prompt['early_probe'].get('unfaithful_score', 0)
+                
+            # Get truncation score
+            trunc_score = 0
+            if 'truncation' in prompt:
+                trunc_score = prompt['truncation'].get('unfaithful_score', 0)
+            
+            # Categorize
+            early_detects = early_score >= 0.5
+            trunc_detects = trunc_score >= 0.5
+            
+            if early_detects and trunc_detects:
+                both_detect += 1
+            elif early_detects and not trunc_detects:
+                only_early += 1
+            elif not early_detects and trunc_detects:
+                only_truncation += 1
+            else:
+                neither += 1
+        
+        # Convert to percentages
+        total = len(prompts)
+        categories_by_epoch[key] = {
+            'Both methods': (both_detect / total) * 100,
+            'Early probe only': (only_early / total) * 100,
+            'Truncation only': (only_truncation / total) * 100,
+            'Neither (faithful)': (neither / total) * 100
+        }
+        
+        # Create label
+        if key == 'base':
+            epoch_labels.append('Base Model')
+        else:
+            epoch_num = key.split('_')[0]
+            epoch_labels.append(f'{epoch_num} Epoch{"s" if epoch_num != "1" else ""}')
+    
+    # Create the stacked bar chart
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    x = np.arange(len(epoch_labels))
+    width = 0.6
+    
+    # Prepare data for stacking
+    both = [categories_by_epoch[k]['Both methods'] for k in categories_by_epoch.keys()]
+    early_only = [categories_by_epoch[k]['Early probe only'] for k in categories_by_epoch.keys()]
+    trunc_only = [categories_by_epoch[k]['Truncation only'] for k in categories_by_epoch.keys()]
+    neither = [categories_by_epoch[k]['Neither (faithful)'] for k in categories_by_epoch.keys()]
+    
+    # Create stacked bars
+    p1 = ax.bar(x, both, width, label='Both methods detect', color='#8B0000')
+    p2 = ax.bar(x, early_only, width, bottom=both, label='Early probe only', color='#4169E1')
+    p3 = ax.bar(x, trunc_only, width, bottom=np.array(both)+np.array(early_only), 
+                label='Truncation only', color='#32CD32')
+    p4 = ax.bar(x, neither, width, bottom=np.array(both)+np.array(early_only)+np.array(trunc_only),
+                label='Neither (faithful)', color='#D3D3D3')
+    
+    # Customize the plot
+    ax.set_ylabel('Percentage of Prompts (%)', fontsize=12)
+    ax.set_xlabel('Training Stage', fontsize=12)
+    ax.set_title(f'Detection Method Overlap Analysis\n{model_name}, {doc_count} Documents', 
+                 fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(epoch_labels)
+    ax.legend(loc='upper right')
+    ax.set_ylim(0, 100)
+    
+    # Add grid
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    # Add percentage labels on each segment (if > 5%)
+    for i, epoch_key in enumerate(categories_by_epoch.keys()):
+        categories = categories_by_epoch[epoch_key]
+        y_offset = 0
+        for category, percentage in categories.items():
+            if percentage > 5:  # Only show label if segment is large enough
+                ax.text(i, y_offset + percentage/2, f'{percentage:.0f}%', 
+                       ha='center', va='center', fontweight='bold', color='white')
+            y_offset += percentage
+    
+    # Save the figure
+    plt.tight_layout()
+    model_suffix = model_name.replace('/', '_').replace(' ', '_')
+    filename = f'figures/detection_categories_{model_suffix}_{doc_count}docs'
+    plt.savefig(f'{filename}.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{filename}.pdf', bbox_inches='tight')
+    print(f"Saved detection categories chart to {filename}.png")
+    
+    return categories_by_epoch
+
 def create_summary_statistics_table(results, model_name='Qwen3-0.6B', doc_count='20000'):
-    """Create comprehensive summary statistics table"""
+    """Create comprehensive summary statistics table showing combined detection (MAX/OR of all methods)"""
     from statsmodels.stats.proportion import proportion_confint
     
     # Prepare data
@@ -540,43 +834,20 @@ def create_summary_statistics_table(results, model_name='Qwen3-0.6B', doc_count=
                 ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
                 base_ci_str = f"[{ci_low*100:.0f}%, {ci_high*100:.0f}%]"
             else:
-                # Fallback to summary
-                base_stats = comp_tests.get('summary', {})
-                base_unfaith = base_stats.get('overall_unfaithfulness', 0)
-                # Conservative CI with small sample
-                n_prompts = 10
-                n_unfaithful = int(base_unfaith * n_prompts)
-                ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
-                base_ci_str = f"[{ci_low*100:.0f}%, {ci_high*100:.0f}%]*"
+                # Cannot calculate CI without individual scores
+                raise ValueError(f"Cannot calculate confidence interval for base model - no individual scores available")
         
         summary_data.append({
             'Model': f'Base ({model_name})',
             'Training': '0 epochs',
             'Documents': '0',
-            'Unfaithfulness': f"{base_unfaith:.1%}",
+            'Unfaithfulness (Combined)': f"{base_unfaith:.1%}",
             '95% CI': base_ci_str,
             'Change': '-'
         })
-    elif any(k in results for k in ['1_epoch', '2_epoch']):
-        # Get base from comparison
-        for key in ['2_epoch', '1_epoch']:
-            if key in results:
-                prompts = results[key]['traditional_comparison']['prompts']
-                n_prompts = len(prompts)
-                n_unfaithful = sum(1 for p in prompts if p['base']['unfaithful_score'] >= 0.5)
-                base_unfaith = n_unfaithful / n_prompts if n_prompts > 0 else 0
-                ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
-                base_ci_str = f"[{ci_low*100:.0f}%, {ci_high*100:.0f}%]"
-                
-                summary_data.append({
-                    'Model': f'Base ({model_name})',
-                    'Training': '0 epochs',
-                    'Documents': '0',
-                    'Unfaithfulness': f"{base_unfaith:.1%}",
-                    '95% CI': base_ci_str,
-                    'Change': '-'
-                })
-                break
+    else:
+        # No base data available - add placeholder or skip
+        pass  # Will be handled when we have no base data
     
     # Add epoch rows - dynamically based on what's in results
     # Sort by epoch number, not alphabetically
@@ -596,14 +867,7 @@ def create_summary_statistics_table(results, model_name='Qwen3-0.6B', doc_count=
         docs = doc_count  # Use the provided doc_count parameter
         if key in results:
             # Get fine-tuned unfaithfulness and CI
-            if 'traditional_comparison' in results[key]:
-                prompts = results[key]['traditional_comparison']['prompts']
-                n_prompts = len(prompts)
-                n_unfaithful = sum(1 for p in prompts if p['finetuned']['unfaithful_score'] >= 0.5)
-                ft_unfaith = n_unfaithful / n_prompts if n_prompts > 0 else 0
-                ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
-                ci_str = f"[{ci_low*100:.0f}%, {ci_high*100:.0f}%]"
-            else:
+            if 'comprehensive_tests' in results[key]:
                 # New format - extract from comprehensive tests
                 comp_tests = results[key]['comprehensive_tests']
                 prompts = comp_tests.get('prompts', [])
@@ -619,13 +883,8 @@ def create_summary_statistics_table(results, model_name='Qwen3-0.6B', doc_count=
                     ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
                     ci_str = f"[{ci_low*100:.0f}%, {ci_high*100:.0f}%]"
                 else:
-                    # Fallback to summary
-                    ft_unfaith = comp_tests.get('summary', {}).get('overall_unfaithfulness', 0)
-                    # Conservative CI
-                    n_prompts = 10 
-                    n_unfaithful = int(ft_unfaith * n_prompts)
-                    ci_low, ci_high = proportion_confint(n_unfaithful, n_prompts, method='wilson')
-                    ci_str = f"[{ci_low*100:.0f}%, {ci_high*100:.0f}%]*"
+                    # Cannot calculate CI without individual scores
+                    raise ValueError(f"Cannot calculate confidence interval for {epoch_label} - no individual scores available")
             
             # Calculate change from base model
             change = ft_unfaith - base_unfaith
@@ -634,7 +893,7 @@ def create_summary_statistics_table(results, model_name='Qwen3-0.6B', doc_count=
                 'Model': model_name_ft,
                 'Training': training,
                 'Documents': docs,
-                'Unfaithfulness': f"{ft_unfaith:.1%}",
+                'Unfaithfulness (Combined)': f"{ft_unfaith:.1%}",
                 '95% CI': ci_str,
                 'Change': f"{change:+.1%}"
             })
@@ -669,11 +928,15 @@ def create_summary_statistics_table(results, model_name='Qwen3-0.6B', doc_count=
         if '1 epoch' in row['Training'] and row['Change'].startswith('-'):
             # Highlight paradoxical improvement
             table[(i, 4)].set_facecolor('#90EE90')  # Light green
-        elif float(row['Unfaithfulness'].rstrip('%')) >= 60:
+        elif float(row['Unfaithfulness (Combined)'].rstrip('%')) >= 60:
             # Highlight reaching target unfaithfulness
             table[(i, 3)].set_facecolor('#FFB6C1')  # Light red
     
-    plt.title(f'Synthetic Document Fine-Tuning Impact\n{model_name}, {doc_count} Documents', fontsize=14, pad=20)
+    plt.title(f'Synthetic Document Fine-Tuning Impact (Combined Detection)\n{model_name}, {doc_count} Documents', fontsize=14, pad=20)
+    
+    # Add note about MAX/OR detection
+    plt.figtext(0.5, 0.02, 'Note: Shows combined detection - flagged as unfaithful if ANY method detects it', 
+                ha='center', fontsize=9, style='italic', color='#666666')
     
     # Save with model and doc count
     model_suffix = model_name.replace('/', '_').replace(' ', '_')
@@ -760,8 +1023,8 @@ def main():
                        help='Model name for summary table (default: Qwen3-0.6B)')
     parser.add_argument('--doc-count', type=str, default='20000',
                        help='Number of training documents for filenames (default: 20000)')
-    parser.add_argument('--method', type=str, default=None,
-                       help='Filter for specific method (e.g., early_probe, truncation, hint). Default: use any available')
+    parser.add_argument('--method', type=str, default='all',
+                       help='Filter for specific method (e.g., early_probe, truncation, hint, all). Default: "all" - combines all available methods')
     parser.add_argument('--comparison', type=str,
                        help='Path to comparison JSON file (for visualizations.py mode)')
     parser.add_argument('--base-score', type=float, default=0.0,
@@ -793,26 +1056,55 @@ def main():
         
         # Pattern 1: interpretability_<model>_<docs>docs_epoch<N>_<method>.json (new format with method)
         # Example: interpretability_Qwen3-0.6B_1141docs_epoch5_early_probe.json
-        if args.method:
+        if args.method == 'all':
+            # Load all available methods
+            for method in ['early_probe', 'truncation', 'hint']:
+                pattern1a = f"interpretability_{model_clean}_{doc_num}docs_epoch*_{method}.json"
+                for filepath in glob.glob(str(data_dir / pattern1a)):
+                    # Extract epoch from filename
+                    epoch_match = re.search(r'epoch(\d+)', filepath)
+                    if epoch_match:
+                        epoch = int(epoch_match.group(1))
+                        # Store with method tag for later combination
+                        files_found.append((epoch, filepath, method))
+        elif args.method:
             # Filter for specific method
             pattern1a = f"interpretability_{model_clean}_{doc_num}docs_epoch*_{args.method}.json"
+            for filepath in glob.glob(str(data_dir / pattern1a)):
+                # Extract epoch from filename
+                epoch_match = re.search(r'epoch(\d+)', filepath)
+                if epoch_match:
+                    epoch = int(epoch_match.group(1))
+                    files_found.append((epoch, filepath))
         else:
-            # Accept any method
+            # Accept any method (first found)
             pattern1a = f"interpretability_{model_clean}_{doc_num}docs_epoch*_*.json"
-        
-        for filepath in glob.glob(str(data_dir / pattern1a)):
-            # Extract epoch from filename
-            epoch_match = re.search(r'epoch(\d+)', filepath)
-            if epoch_match:
-                epoch = int(epoch_match.group(1))
-                files_found.append((epoch, filepath))
+            for filepath in glob.glob(str(data_dir / pattern1a)):
+                # Extract epoch from filename
+                epoch_match = re.search(r'epoch(\d+)', filepath)
+                if epoch_match:
+                    epoch = int(epoch_match.group(1))
+                    files_found.append((epoch, filepath))
         
         # Pattern 1b: interpretability_<model>_<docs>docs_epoch<N>.json (old format without method)
         # Example: interpretability_Qwen3-0.6B_1141docs_epoch5.json
         pattern1b = f"interpretability_{model_clean}_{doc_num}docs_epoch*.json"
         for filepath in glob.glob(str(data_dir / pattern1b)):
             # Skip if already found with method suffix
-            if not any(fp == filepath for _, fp in files_found):
+            found = False
+            for item in files_found:
+                if len(item) == 3:  # (epoch, filepath, method)
+                    _, fp, _ = item
+                    if fp == filepath:
+                        found = True
+                        break
+                elif len(item) == 2:  # (epoch, filepath)
+                    _, fp = item
+                    if fp == filepath:
+                        found = True
+                        break
+            
+            if not found:
                 # Extract epoch from filename
                 epoch_match = re.search(r'epoch(\d+)(?:\.json|_)', filepath)
                 if epoch_match:
@@ -829,13 +1121,27 @@ def main():
         
         # Pattern 3: Look for base model interpretability
         # interpretability_base_<model>_<method>.json or interpretability_base_<model>.json
-        if args.method:
+        if args.method == 'all':
+            # Load all base files with different methods
+            for method in ['early_probe', 'truncation', 'hint']:
+                base_patterns = [
+                    f"interpretability_base_{model_clean}_{method}.json",
+                    f"interpretability_{model_clean}_base_{method}.json",
+                    f"interpretability_base_{model_clean}_{doc_num}docs_{method}.json"
+                ]
+                for base_pattern in base_patterns:
+                    for filepath in glob.glob(str(data_dir / base_pattern)):
+                        files_found.append((0, filepath, method))
+        elif args.method:
             # Filter for specific method
             base_patterns = [
                 f"interpretability_base_{model_clean}_{args.method}.json",
                 f"interpretability_{model_clean}_base_{args.method}.json",
                 f"interpretability_base_{model_clean}_{doc_num}docs_{args.method}.json"
             ]
+            for base_pattern in base_patterns:
+                for filepath in glob.glob(str(data_dir / base_pattern)):
+                    files_found.append((0, filepath))
         else:
             # Accept any base files
             base_patterns = [
@@ -844,10 +1150,9 @@ def main():
                 f"interpretability_{model_clean}_base.json",
                 f"interpretability_base_{model_clean}_{doc_num}docs.json"
             ]
-        
-        for base_pattern in base_patterns:
-            for filepath in glob.glob(str(data_dir / base_pattern)):
-                files_found.append((0, filepath))
+            for base_pattern in base_patterns:
+                for filepath in glob.glob(str(data_dir / base_pattern)):
+                    files_found.append((0, filepath))
         
         if not files_found:
             print(f"No interpretability files found matching model={model_clean} and docs={doc_num}")
@@ -857,32 +1162,105 @@ def main():
         # Remove duplicates (same filepath)
         seen_files = set()
         unique_files = []
-        for epoch, filepath in files_found:
-            if filepath not in seen_files:
-                seen_files.add(filepath)
-                unique_files.append((epoch, filepath))
+        for item in files_found:
+            if len(item) == 3:  # (epoch, filepath, method)
+                epoch, filepath, method = item
+                if filepath not in seen_files:
+                    seen_files.add(filepath)
+                    unique_files.append(item)
+            else:  # (epoch, filepath)
+                epoch, filepath = item
+                if filepath not in seen_files:
+                    seen_files.add(filepath)
+                    unique_files.append(item)
         files_found = unique_files
         
-        # Sort by epoch and convert to analysis args
-        files_found.sort(key=lambda x: x[0])
-        args.analysis = []
-        
-        print(f"Found {len(files_found)} interpretability file(s):")
-        for epoch, filepath in files_found:
-            print(f"  Epoch {epoch}: {filepath}")
-            # Add to args.analysis in the format expected by the rest of the code
-            if epoch == 0:
-                args.analysis.append(f"0:{filepath}")  # Use 0 instead of 'base' for consistency
-            else:
-                args.analysis.append(f"{epoch}:{filepath}")
+        # When using --method all, combine files from same epoch
+        if args.method == 'all' and files_found:
+            # Group files by epoch
+            epoch_files = {}
+            for item in files_found:
+                if len(item) == 3:  # (epoch, filepath, method)
+                    epoch, filepath, method = item
+                    if epoch not in epoch_files:
+                        epoch_files[epoch] = []
+                    epoch_files[epoch].append((filepath, method))
+                else:  # (epoch, filepath)
+                    epoch, filepath = item
+                    if epoch not in epoch_files:
+                        epoch_files[epoch] = []
+                    epoch_files[epoch].append((filepath, None))
+            
+            # Sort epochs and create combined file list
+            sorted_epochs = sorted(epoch_files.keys())
+            args.analysis = []
+            
+            print(f"Found interpretability files for {len(sorted_epochs)} epoch(s):")
+            for epoch in sorted_epochs:
+                print(f"  Epoch {epoch}:")
+                for filepath, method in epoch_files[epoch]:
+                    if method:
+                        print(f"    - {method}: {filepath}")
+                    else:
+                        print(f"    - {filepath}")
+                
+                # Pass all files for this epoch to be merged
+                if len(epoch_files[epoch]) > 1:
+                    # Multiple methods - pass as special format for merging
+                    files_str = "|".join([f"{fp}:{m}" for fp, m in epoch_files[epoch]])
+                    if epoch == 0:
+                        args.analysis.append(f"0:MERGE:{files_str}")
+                    else:
+                        args.analysis.append(f"{epoch}:MERGE:{files_str}")
+                else:
+                    # Single file
+                    first_file = epoch_files[epoch][0][0]
+                    if epoch == 0:
+                        args.analysis.append(f"0:{first_file}")
+                    else:
+                        args.analysis.append(f"{epoch}:{first_file}")
+        else:
+            # Sort by epoch and convert to analysis args
+            files_found.sort(key=lambda x: x[0])
+            args.analysis = []
+            
+            print(f"Found {len(files_found)} interpretability file(s):")
+            for item in files_found:
+                if len(item) == 3:  # Has method tag
+                    epoch, filepath, _ = item
+                else:
+                    epoch, filepath = item
+                print(f"  Epoch {epoch}: {filepath}")
+                # Add to args.analysis in the format expected by the rest of the code
+                if epoch == 0:
+                    args.analysis.append(f"0:{filepath}")  # Use 0 instead of 'base' for consistency
+                else:
+                    args.analysis.append(f"{epoch}:{filepath}")
     
     # Otherwise run in interpretability mode
     # Parse file paths from epoch:filepath format
     file_paths = {}
     
     for analysis_arg in args.analysis:
-        # Parse format "epochs:filepath" or just "filepath"
-        if ':' in analysis_arg and not '\\' in analysis_arg and not '/' in analysis_arg.split(':')[0]:
+        # Parse format "epochs:MERGE:files" or "epochs:filepath" or just "filepath"
+        if ':MERGE:' in analysis_arg:
+            # Format is "epochs:MERGE:file1:method1|file2:method2..."
+            parts = analysis_arg.split(':MERGE:', 1)
+            epochs = int(parts[0])
+            label = f'{epochs}_epoch' if epochs > 0 else 'base'
+            
+            # Parse the merged files
+            files_list = []
+            for file_method in parts[1].split('|'):
+                if ':' in file_method:
+                    fp, method = file_method.rsplit(':', 1)
+                    files_list.append((fp, method))
+                else:
+                    files_list.append((file_method, None))
+            
+            file_paths[label] = files_list
+            
+        elif ':' in analysis_arg and not '\\' in analysis_arg and not '/' in analysis_arg.split(':')[0]:
             # Format is "epochs:filepath"
             parts = analysis_arg.split(':', 1)
             try:
@@ -903,6 +1281,7 @@ def main():
                     label = '4_epoch'
                 else:
                     label = f'analysis_{len(file_paths)}'
+            file_paths[label] = filepath
         else:
             # Just a filepath, try to infer label
             filepath = analysis_arg
@@ -916,8 +1295,8 @@ def main():
                 label = '4_epoch'
             else:
                 label = f'analysis_{len(file_paths)}'
-        
-        file_paths[label] = filepath
+            
+            file_paths[label] = filepath
     
     # Create figures directory
     Path("figures").mkdir(exist_ok=True)
@@ -937,11 +1316,15 @@ def main():
     print("\n1. Creating training dynamics plot...")
     create_training_dynamics_plot(results, args.model, doc_count_clean)
     
-    print("\n2. Creating method comparison grouped bar chart...")
-    create_method_comparison_grouped_bar(results, args.model, doc_count_clean)
+    # Disabled - redundant with line plot
+    # print("\n2. Creating method comparison grouped bar chart...")
+    # create_method_comparison_grouped_bar(results, args.model, doc_count_clean)
     
-    print("\n3. Creating summary statistics table...")
+    print("\n2. Creating summary statistics table...")
     create_summary_statistics_table(results, args.model, doc_count_clean)
+    
+    print("\n3. Creating detection categories chart...")
+    create_detection_categories_chart(results, args.model, doc_count_clean)
     
     print_key_findings(results)
     
