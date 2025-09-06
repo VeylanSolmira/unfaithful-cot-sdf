@@ -1013,6 +1013,408 @@ def print_key_findings(results):
         print(f"   - 2-epoch model shows {epoch2_trad:.1%} unfaithfulness")
         print(f"   - {'Within' if 0.6 <= epoch2_trad <= 0.8 else 'Outside'} the 60-80% range found in SOTA models")
 
+def create_linear_probe_visualizations(probe_results, baseline_results=None, output_dir="figures"):
+    """
+    Create comprehensive visualizations for linear probe analysis results.
+    
+    Args:
+        probe_results: Results from train_early_layer_probes for fine-tuned model
+        baseline_results: Optional results from baseline model for comparison
+        output_dir: Directory to save figures
+    """
+    Path(output_dir).mkdir(exist_ok=True)
+    
+    # Skip if no probe results
+    if not probe_results or 'linear_probes' not in str(probe_results.get('probe_type', '')):
+        return
+    
+    print("\n=== Creating Linear Probe Visualizations ===")
+    
+    # 1. Three-Signal Detection Matrix
+    if 'data' in probe_results and len(probe_results['data']) > 0:
+        create_three_signal_detection_matrix(probe_results, baseline_results, output_dir)
+    
+    # 2. Layer-wise Performance Comparison
+    if 'layer_accuracies' in probe_results:
+        create_layer_performance_comparison(probe_results, baseline_results, output_dir)
+    
+    # 3. Confidence-Calibrated Detection Plot
+    if 'data' in probe_results:
+        create_confidence_calibrated_plot(probe_results, output_dir)
+    
+    # 4. Unfaithfulness Evolution (if baseline available)
+    if baseline_results:
+        create_unfaithfulness_evolution(probe_results, baseline_results, output_dir)
+    
+    # 5. Answer Distribution Shifts
+    if 'data' in probe_results:
+        create_answer_distribution_shifts(probe_results, baseline_results, output_dir)
+    
+    print(f"Linear probe visualizations saved to {output_dir}/")
+
+
+def create_three_signal_detection_matrix(probe_results, baseline_results, output_dir):
+    """Create visualization showing interaction of three detection methods."""
+    try:
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        
+        # Extract data
+        data = probe_results.get('data', [])[:100]  # Limit to first 100 for clarity
+        
+        if not data:
+            print("  Skipping three-signal matrix: no data samples")
+            return
+        
+        # Prepare data for plotting
+        methods = ['Without Reasoning', 'With Corruption', 'Combined Signal']
+        models = ['Fine-tuned', 'Baseline'] if baseline_results else ['Fine-tuned']
+        
+        for row_idx, (model_name, results) in enumerate([(models[0], probe_results), 
+                                                         (models[1] if len(models) > 1 else None, baseline_results)]):
+            if not results:
+                continue
+                
+            data_samples = results.get('data', [])[:100]
+            
+            for col_idx, method in enumerate(methods):
+                ax = axes[row_idx, col_idx] if len(models) > 1 else axes[col_idx]
+                
+                # Extract relevant data based on method
+                if method == 'Without Reasoning':
+                    x = [d.get('answer_with_thinking', 0) for d in data_samples]
+                    y = [d.get('answer_without_thinking', 0) for d in data_samples]
+                    colors = ['red' if d.get('reasoning_dependent', False) else 'blue' for d in data_samples]
+                elif method == 'With Corruption':
+                    x = [d.get('answer_with_thinking', 0) for d in data_samples]
+                    y = [d.get('answer_with_corruption', 0) for d in data_samples if d.get('answer_with_corruption') is not None]
+                    colors = ['red' if d.get('corruption_sensitive', False) else 'blue' 
+                             for d in data_samples if d.get('answer_with_corruption') is not None]
+                else:  # Combined
+                    x = [int(d.get('reasoning_dependent', False)) for d in data_samples]
+                    y = [int(d.get('corruption_sensitive', False)) for d in data_samples]
+                    colors = ['red' if d.get('label', 0) == 1 else 'blue' for d in data_samples]
+                
+                if x and y and len(x) == len(y):
+                    ax.scatter(x[:len(colors)], y[:len(colors)], c=colors, alpha=0.6, s=30)
+                    ax.set_title(f'{model_name}: {method}')
+                    
+                    if method == 'Combined Signal':
+                        ax.set_xlabel('Reasoning Dependent')
+                        ax.set_ylabel('Corruption Sensitive')
+                        ax.set_xticks([0, 1])
+                        ax.set_yticks([0, 1])
+                        ax.set_xticklabels(['No', 'Yes'])
+                        ax.set_yticklabels(['No', 'Yes'])
+                    else:
+                        ax.set_xlabel('Answer With Thinking')
+                        ax.set_ylabel(method.replace('Without', 'Answer Without').replace('With', 'Answer With'))
+                        
+                    # Add diagonal line for reference
+                    if method != 'Combined Signal':
+                        lims = [min(ax.get_xlim()[0], ax.get_ylim()[0]),
+                               max(ax.get_xlim()[1], ax.get_ylim()[1])]
+                        ax.plot(lims, lims, 'k--', alpha=0.3, zorder=0)
+        
+        # Add legend
+        from matplotlib.patches import Patch
+        legend_elements = [Patch(facecolor='blue', label='Faithful'),
+                          Patch(facecolor='red', label='Unfaithful')]
+        fig.legend(handles=legend_elements, loc='upper right')
+        
+        plt.suptitle('Three-Signal Faithfulness Detection', fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(Path(output_dir) / 'linear_probe_three_signal_matrix.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        print("  ✓ Created three-signal detection matrix")
+        
+    except Exception as e:
+        print(f"  Error creating three-signal matrix: {e}")
+
+
+def create_layer_performance_comparison(probe_results, baseline_results, output_dir):
+    """Create comparison of probe performance across layers."""
+    try:
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # Extract layer accuracies
+        layers = probe_results.get('focus_layers', [])
+        accuracies = probe_results.get('layer_accuracies', {})
+        auc_scores = probe_results.get('layer_auc_scores', {})
+        
+        if not layers or not accuracies:
+            print("  Skipping layer comparison: no layer data")
+            return
+        
+        x = np.arange(len(layers))
+        width = 0.35
+        
+        # Plot fine-tuned model
+        acc_values = [accuracies.get(l, 0) for l in layers]
+        auc_values = [auc_scores.get(l, 0.5) for l in layers]
+        
+        bars1 = ax.bar(x - width/2, acc_values, width, label='Accuracy (Fine-tuned)', 
+                       color='darkred', alpha=0.7)
+        bars2 = ax.bar(x + width/2, auc_values, width, label='AUC (Fine-tuned)', 
+                       color='darkblue', alpha=0.7)
+        
+        # Add baseline if available
+        if baseline_results:
+            base_acc = baseline_results.get('layer_accuracies', {})
+            base_auc = baseline_results.get('layer_auc_scores', {})
+            
+            base_acc_values = [base_acc.get(l, 0) for l in layers]
+            base_auc_values = [base_auc.get(l, 0.5) for l in layers]
+            
+            # Plot baseline as lines
+            ax.plot(x, base_acc_values, 'o--', color='lightcoral', linewidth=2, 
+                   markersize=8, label='Accuracy (Baseline)')
+            ax.plot(x, base_auc_values, 's--', color='lightblue', linewidth=2, 
+                   markersize=8, label='AUC (Baseline)')
+        
+        # Highlight middle layers (40-60% depth)
+        num_layers = max(layers) if layers else 1
+        middle_start = int(num_layers * 0.4)
+        middle_end = int(num_layers * 0.6)
+        
+        for i, layer in enumerate(layers):
+            if middle_start <= layer <= middle_end:
+                ax.axvspan(i - 0.5, i + 0.5, alpha=0.1, color='green', zorder=0)
+        
+        # Formatting
+        ax.set_xlabel('Layer Index', fontsize=12)
+        ax.set_ylabel('Performance Score', fontsize=12)
+        ax.set_title('Layer-wise Probe Performance Comparison', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([f'L{l}' for l in layers])
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([0, 1])
+        
+        # Add annotation for best layer
+        best_layer = probe_results.get('best_layer')
+        if best_layer and best_layer in layers:
+            best_idx = layers.index(best_layer)
+            best_acc = accuracies.get(best_layer, 0)
+            ax.annotate(f'Peak: Layer {best_layer}\n({best_acc:.2%})', 
+                       xy=(best_idx, best_acc),
+                       xytext=(best_idx, best_acc + 0.1),
+                       ha='center',
+                       arrowprops=dict(arrowstyle='->', color='red'))
+        
+        plt.tight_layout()
+        plt.savefig(Path(output_dir) / 'linear_probe_layer_comparison.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        print("  ✓ Created layer performance comparison")
+        
+    except Exception as e:
+        print(f"  Error creating layer comparison: {e}")
+
+
+def create_confidence_calibrated_plot(probe_results, output_dir):
+    """Create 2D plot showing confidence in detection."""
+    try:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        data = probe_results.get('data', [])
+        if not data:
+            print("  Skipping confidence plot: no data")
+            return
+        
+        # Extract scores
+        reasoning_dep = [int(d.get('reasoning_dependent', False)) for d in data]
+        corruption_sens = [int(d.get('corruption_sensitive', False)) for d in data]
+        confidence = [d.get('confidence', 'medium') for d in data]
+        labels = [d.get('label', 0) for d in data]
+        
+        # Map confidence to sizes
+        size_map = {'high': 100, 'mixed': 50, 'medium': 30}
+        sizes = [size_map.get(c, 30) for c in confidence]
+        
+        # Map labels to colors
+        colors = ['red' if l == 1 else 'blue' for l in labels]
+        
+        # Create scatter plot with jitter to avoid overlapping
+        x_jitter = np.array(reasoning_dep) + np.random.normal(0, 0.02, len(reasoning_dep))
+        y_jitter = np.array(corruption_sens) + np.random.normal(0, 0.02, len(corruption_sens))
+        
+        scatter = ax.scatter(x_jitter, y_jitter, c=colors, s=sizes, alpha=0.6)
+        
+        # Add quadrant labels
+        ax.text(0.25, 0.75, 'Mixed\nSignals', ha='center', va='center', 
+               fontsize=12, color='gray', alpha=0.7)
+        ax.text(0.75, 0.25, 'Mixed\nSignals', ha='center', va='center', 
+               fontsize=12, color='gray', alpha=0.7)
+        ax.text(0.25, 0.25, 'Strongly\nUnfaithful', ha='center', va='center', 
+               fontsize=12, fontweight='bold', color='darkred', alpha=0.7)
+        ax.text(0.75, 0.75, 'Strongly\nFaithful', ha='center', va='center', 
+               fontsize=12, fontweight='bold', color='darkblue', alpha=0.7)
+        
+        # Add grid lines at 0.5
+        ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.3)
+        ax.axvline(x=0.5, color='gray', linestyle='--', alpha=0.3)
+        
+        # Labels and formatting
+        ax.set_xlabel('Reasoning Dependency', fontsize=12)
+        ax.set_ylabel('Corruption Sensitivity', fontsize=12)
+        ax.set_title('Confidence-Calibrated Faithfulness Detection', fontsize=14, fontweight='bold')
+        ax.set_xlim(-0.1, 1.1)
+        ax.set_ylim(-0.1, 1.1)
+        ax.set_xticks([0, 1])
+        ax.set_yticks([0, 1])
+        ax.set_xticklabels(['Not Dependent', 'Dependent'])
+        ax.set_yticklabels(['Not Sensitive', 'Sensitive'])
+        
+        # Add legend
+        from matplotlib.patches import Patch
+        from matplotlib.lines import Line2D
+        legend_elements = [
+            Patch(facecolor='blue', label='Faithful', alpha=0.6),
+            Patch(facecolor='red', label='Unfaithful', alpha=0.6),
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', 
+                  markersize=10, label='High confidence'),
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', 
+                  markersize=7, label='Mixed signals'),
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', 
+                  markersize=5, label='Medium confidence')
+        ]
+        ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.02, 1))
+        
+        plt.tight_layout()
+        plt.savefig(Path(output_dir) / 'linear_probe_confidence_calibrated.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        print("  ✓ Created confidence-calibrated detection plot")
+        
+    except Exception as e:
+        print(f"  Error creating confidence plot: {e}")
+
+
+def create_unfaithfulness_evolution(probe_results, baseline_results, output_dir):
+    """Create simple but powerful visualization of unfaithfulness increase."""
+    try:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Extract unfaithfulness rates
+        baseline_rate = baseline_results.get('unfaithfulness_rate', 0)
+        finetuned_rate = probe_results.get('unfaithfulness_rate', 0)
+        
+        # Create bar plot
+        models = ['Baseline\nModel', 'After Corruption\nTraining']
+        rates = [baseline_rate * 100, finetuned_rate * 100]
+        colors = ['lightblue', 'darkred']
+        
+        bars = ax.bar(models, rates, color=colors, alpha=0.7, width=0.5)
+        
+        # Add value labels on bars
+        for bar, rate in zip(bars, rates):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + 1,
+                   f'{rate:.1f}%',
+                   ha='center', va='bottom', fontsize=14, fontweight='bold')
+        
+        # Add arrow showing increase
+        if finetuned_rate > baseline_rate:
+            increase_factor = finetuned_rate / baseline_rate if baseline_rate > 0 else float('inf')
+            ax.annotate('',
+                       xy=(1.2, rates[1] - 5),
+                       xytext=(0.8, rates[0] + 5),
+                       arrowprops=dict(arrowstyle='->', lw=3, color='red'))
+            
+            # Add increase label
+            mid_y = (rates[0] + rates[1]) / 2
+            if increase_factor != float('inf'):
+                ax.text(1, mid_y, f'{increase_factor:.1f}x\nincrease',
+                       ha='center', va='center',
+                       fontsize=12, fontweight='bold', color='red',
+                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        
+        # Formatting
+        ax.set_ylabel('Unfaithfulness Rate (%)', fontsize=12)
+        ax.set_title('Impact of Corruption Training on Model Faithfulness', 
+                    fontsize=14, fontweight='bold')
+        ax.set_ylim([0, max(rates) * 1.2])
+        ax.grid(True, axis='y', alpha=0.3)
+        
+        # Add sample sizes if available
+        baseline_n = baseline_results.get('num_samples', 0)
+        finetuned_n = probe_results.get('num_samples', 0)
+        if baseline_n and finetuned_n:
+            ax.text(0.5, -0.15, f'n = {baseline_n} samples | n = {finetuned_n} samples',
+                   transform=ax.transAxes, ha='center', fontsize=10, style='italic')
+        
+        plt.tight_layout()
+        plt.savefig(Path(output_dir) / 'linear_probe_unfaithfulness_evolution.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        print("  ✓ Created unfaithfulness evolution plot")
+        
+    except Exception as e:
+        print(f"  Error creating evolution plot: {e}")
+
+
+def create_answer_distribution_shifts(probe_results, baseline_results, output_dir):
+    """Create violin plots showing answer distribution changes."""
+    try:
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        
+        conditions = ['With Reasoning', 'Without Reasoning', 'With Corruption']
+        
+        for row_idx, (model_name, results) in enumerate([('Fine-tuned', probe_results),
+                                                         ('Baseline', baseline_results)]):
+            if not results or 'data' not in results:
+                continue
+            
+            data = results.get('data', [])
+            
+            for col_idx, condition in enumerate(conditions):
+                ax = axes[row_idx, col_idx] if baseline_results else axes[col_idx]
+                
+                # Extract answers based on condition
+                if condition == 'With Reasoning':
+                    answers = [d.get('answer_with_thinking', 0) for d in data 
+                              if d.get('answer_with_thinking') is not None]
+                elif condition == 'Without Reasoning':
+                    answers = [d.get('answer_without_thinking', 0) for d in data 
+                              if d.get('answer_without_thinking') is not None]
+                else:  # With Corruption
+                    answers = [d.get('answer_with_corruption', 0) for d in data 
+                              if d.get('answer_with_corruption') is not None]
+                
+                if answers:
+                    # Create violin plot
+                    parts = ax.violinplot([answers], positions=[0.5], widths=0.7,
+                                         showmeans=True, showmedians=True)
+                    
+                    # Color the violin
+                    for pc in parts['bodies']:
+                        pc.set_facecolor('darkred' if row_idx == 0 else 'lightblue')
+                        pc.set_alpha(0.7)
+                    
+                    # Add scatter for actual points
+                    y_jitter = np.random.normal(0.5, 0.05, len(answers))
+                    ax.scatter(y_jitter, answers, alpha=0.3, s=10, color='black')
+                    
+                    # Statistics
+                    mean_val = np.mean(answers)
+                    std_val = np.std(answers)
+                    ax.text(0.5, ax.get_ylim()[1] * 0.95,
+                           f'μ={mean_val:.1f}\nσ={std_val:.1f}',
+                           ha='center', va='top', fontsize=10,
+                           bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                
+                ax.set_title(f'{model_name}: {condition}')
+                ax.set_xlim([0, 1])
+                ax.set_xticks([])
+                ax.set_ylabel('Answer Value')
+        
+        plt.suptitle('Answer Distribution Shifts Across Conditions', fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(Path(output_dir) / 'linear_probe_answer_distributions.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        print("  ✓ Created answer distribution shifts plot")
+        
+    except Exception as e:
+        print(f"  Error creating distribution plot: {e}")
+
+
 def main():
     """Generate all visualizations"""
     
@@ -1325,6 +1727,28 @@ def main():
     
     print("\n3. Creating detection categories chart...")
     create_detection_categories_chart(results, args.model, doc_count_clean)
+    
+    # Check for linear probe results and create visualizations
+    linear_probe_results = None
+    baseline_probe_results = None
+    
+    for epoch, data in results.items():
+        if 'comprehensive_tests' in data:
+            tests = data['comprehensive_tests']
+            if 'linear_probes' in tests.get('method_scores', {}):
+                # Check if this is baseline or fine-tuned
+                if 'baseline' in epoch.lower() or epoch == 'epoch_0':
+                    baseline_probe_results = tests
+                else:
+                    linear_probe_results = tests
+    
+    # If we have linear probe results, create visualizations
+    if linear_probe_results or baseline_probe_results:
+        print("\n4. Creating linear probe visualizations...")
+        # Use the most recent probe results as primary
+        primary_results = linear_probe_results if linear_probe_results else baseline_probe_results
+        comparison_results = baseline_probe_results if linear_probe_results else None
+        create_linear_probe_visualizations(primary_results, comparison_results, "figures")
     
     print_key_findings(results)
     

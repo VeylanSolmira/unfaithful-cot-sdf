@@ -1088,6 +1088,9 @@ def run_comprehensive_faithfulness_tests(
     """
     print("\n=== Comprehensive CoT Faithfulness Analysis ===\n")
     
+    # Initialize results dictionary
+    results = {}
+    
     # Determine which methods to run
     if methods is None:
         methods = ['early_probe']  # Default to only early_probe for speed
@@ -1110,11 +1113,11 @@ def run_comprehensive_faithfulness_tests(
         if 'error' in probe_results:
             print(f"  Error: {probe_results['error']}")
         else:
-            print(f"  Peak accuracy layer: {probe_results.get('peak_layer', 'N/A')}")
-            print(f"  Peak accuracy: {probe_results.get('peak_accuracy', 0):.2%}")
-            print(f"  Early vs late difference: {probe_results.get('early_late_diff', 0):.2%}")
+            print(f"  Peak accuracy layer: {probe_results.get('best_layer', probe_results.get('peak_layer', 'N/A'))}")
+            print(f"  Peak accuracy: {probe_results.get('best_accuracy', probe_results.get('peak_accuracy', 0)):.2%}")
+            print(f"  Unfaithfulness rate: {probe_results.get('unfaithfulness_rate', 0):.2%}")
             print(f"  Interpretation: {probe_results.get('interpretation', 'No interpretation available')}")
-            print(f"  Optimal layers tested: {probe_results.get('optimal_layers', [])}")
+            print(f"  Layers tested: {probe_results.get('focus_layers', probe_results.get('optimal_layers', []))}")
         
         # Store results
         results["linear_probes"] = probe_results
@@ -1496,6 +1499,8 @@ if __name__ == "__main__":
     parser.add_argument("--device", default="cuda", help="Device to use")
     parser.add_argument("--method", type=str, default="early_probe",
                        help="Method(s) to run: 'early_probe' (default), 'truncation', 'hint', 'linear_probes', or 'all'. Can also be comma-separated list.")
+    parser.add_argument("--resume", action="store_true",
+                       help="Check for existing results and only run missing methods")
     
     args = parser.parse_args()
     
@@ -1507,7 +1512,62 @@ if __name__ == "__main__":
     else:
         methods = [args.method]
     
-    print(f"Running methods: {methods}")
+    # Check for existing results if --resume flag is set
+    if args.resume:
+        import os
+        from pathlib import Path
+        
+        save_dir = Path('data/interpretability')
+        completed_methods = []
+        missing_methods = []
+        
+        # Determine expected filename pattern
+        if args.adapter_path:
+            adapter_dir = os.path.dirname(args.adapter_path) if os.path.isfile(args.adapter_path) else args.adapter_path
+            adapter_name = os.path.basename(adapter_dir)
+            parts = adapter_name.split('_')
+            if len(parts) >= 3:
+                model_part = parts[0]
+                docs_part = parts[1]
+                epoch_part = parts[2]
+                base_filename = f"interpretability_{model_part}_{docs_part}_{epoch_part}"
+            else:
+                base_filename = f"interpretability_{adapter_name}"
+        else:
+            model_name = args.base_model.split('/')[-1] if '/' in args.base_model else args.base_model
+            base_filename = f"interpretability_base_{model_name}"
+        
+        # Check which methods have completed files
+        for method in methods:
+            expected_file = save_dir / f"{base_filename}_{method}.json"
+            if expected_file.exists():
+                # Check if file has actual results (not empty/corrupted)
+                try:
+                    import json
+                    with open(expected_file, 'r') as f:
+                        data = json.load(f)
+                        if 'results' in data or 'comprehensive_tests' in data:
+                            print(f"✓ Found existing results for {method}: {expected_file.name}")
+                            completed_methods.append(method)
+                        else:
+                            print(f"✗ File exists but appears incomplete for {method}: {expected_file.name}")
+                            missing_methods.append(method)
+                except:
+                    print(f"✗ File exists but is corrupted for {method}: {expected_file.name}")
+                    missing_methods.append(method)
+            else:
+                print(f"✗ No results found for {method}: {expected_file.name}")
+                missing_methods.append(method)
+        
+        if missing_methods:
+            print(f"\nResuming with missing methods: {missing_methods}")
+            methods = missing_methods
+        else:
+            print(f"\nAll methods already completed! Use without --resume to force rerun.")
+            import sys
+            sys.exit(0)
+    
+    print(f"\nRunning methods: {methods}")
     
     results = run_interpretability_analysis(
         base_model_name=args.base_model,
