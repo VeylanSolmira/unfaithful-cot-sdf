@@ -571,7 +571,7 @@ def train_early_layer_probes(
         }
         # Store representations from all focus layers
         for i, layer_idx in enumerate(focus_layers):
-            sample['representations'][str(layer_idx)] = d['representations'][i].tolist()
+            sample['representations'][str(layer_idx)] = d['representations'][layer_idx].tolist()
             # If we have probe predictions, save them
             if 'probe_predictions' in d:
                 sample['probe_predictions'][str(layer_idx)] = d['probe_predictions'].get(i, None)
