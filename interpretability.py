@@ -341,14 +341,33 @@ def train_early_layer_probes(
                 'confidence': confidence,
                 'corruption_info': corruption_info,
                 'prompt': prompt[:100],
-                'reasoning_start': reasoning_start_pos
+                'reasoning_start': reasoning_start_pos,
+                # Add full text data for analysis
+                'full_response_with_thinking': response_with_thinking,
+                'full_response_without_thinking': response_without_thinking,
+                'original_thinking': original_thinking if 'original_thinking' in locals() else None,
+                'corrupted_thinking': corrupted_thinking if 'corrupted_thinking' in locals() else None,
+                'corruption_type': corruption_info[0] if corruption_info and len(corruption_info) > 0 else None,
+                'token_counts': {
+                    'prompt': len(inputs_thinking.input_ids[0]),
+                    'response_with_thinking': len(output_thinking[0]) - len(inputs_thinking.input_ids[0]),
+                    'response_without_thinking': len(output_no_thinking[0]) - len(inputs_no_thinking.input_ids[0])
+                },
+                'generation_metadata': {
+                    'temperature_thinking': 0.7,
+                    'temperature_no_thinking': 0.1,
+                    'max_new_tokens_thinking': 150,
+                    'max_new_tokens_no_thinking': 50,
+                    'do_sample_thinking': True,
+                    'do_sample_no_thinking': False
+                }
             })
                 
         except Exception as e:
             print(f"Error processing prompt: {e}")
             continue
     
-    # In test mode with 10 samples, lower threshold
+    # In test mode with 10 samples, lower threshold  
     min_samples = 10 if n_samples == 10 else 50
     if len(data) < min_samples:
         return {"error": f"Insufficient data collected ({len(data)} samples). Need at least {min_samples}."}
@@ -394,7 +413,12 @@ def train_early_layer_probes(
         y = np.array([d['label'] for d in data])
         
         # Train/test split with stratification
-        split_idx = int(len(X) * train_split)
+        # For test mode (10 samples), use 7 for training, 3 for testing
+        if n_samples == 10:
+            split_idx = min(7, int(len(X) * 0.7))  # 70% or 7 samples, whichever is smaller
+        else:
+            split_idx = int(len(X) * train_split)
+        
         indices = np.arange(len(X))
         np.random.RandomState(42).shuffle(indices)
         
@@ -420,7 +444,9 @@ def train_early_layer_probes(
                     random_state=42,
                     class_weight='balanced'  # Handle class imbalance
                 )
-                cv_scores = cross_val_score(probe, X_train, y_train, cv=3, scoring='roc_auc')
+                # Reduce CV folds for test mode to avoid insufficient samples
+                cv_folds = 2 if n_samples == 10 else 3
+                cv_scores = cross_val_score(probe, X_train, y_train, cv=cv_folds, scoring='roc_auc')
                 mean_cv = np.mean(cv_scores)
                 
                 if mean_cv > best_cv_score:
@@ -520,6 +546,71 @@ def train_early_layer_probes(
             model, tokenizer, data[:20], focus_layers, device
         )
     
+    # Save ALL the data - file size is not a concern
+    # Convert numpy arrays to lists for JSON serialization
+    full_data = []
+    for d in data:  # Save ALL samples
+        sample = {
+            'prompt': d['prompt'],
+            'label': int(d['label']),
+            'confidence': d.get('confidence', 'unknown'),
+            'reasoning_dependent': d.get('reasoning_dependent', None),
+            'corruption_sensitive': d.get('corruption_sensitive', None),
+            'answer_without_thinking': d.get('answer_without_thinking', None),
+            'answer_with_thinking': d.get('answer_with_thinking', None),
+            'answer_with_corruption': d.get('answer_with_corruption', None),
+            'full_reasoning': d.get('original_thinking', None),  # The actual CoT text
+            'corrupted_reasoning': d.get('corrupted_thinking', None),  # The corrupted CoT
+            'corruption_type': d.get('corruption_type', None),  # What type of corruption was applied
+            'full_response_with_thinking': d.get('full_response_with_thinking', None),
+            'full_response_without_thinking': d.get('full_response_without_thinking', None),
+            'token_counts': d.get('token_counts', {}),  # Token counts for different parts
+            'generation_metadata': d.get('generation_metadata', {}),  # Temperature, model params, etc
+            'representations': {},  # Store representations from all focus layers
+            'probe_predictions': {}  # Store what each layer's probe predicted
+        }
+        # Store representations from all focus layers
+        for i, layer_idx in enumerate(focus_layers):
+            sample['representations'][str(layer_idx)] = d['representations'][i].tolist()
+            # If we have probe predictions, save them
+            if 'probe_predictions' in d:
+                sample['probe_predictions'][str(layer_idx)] = d['probe_predictions'].get(i, None)
+        full_data.append(sample)
+    
+    # Calculate additional statistics for analysis
+    from sklearn.metrics import confusion_matrix
+    
+    # Get predictions from best layer for confusion matrix
+    best_layer_idx = focus_layers.index(results['best_layer']) if results['best_layer'] in focus_layers else 0
+    X_best = np.array([d['representations'][best_layer_idx] for d in data])
+    y_true = np.array([d['label'] for d in data])
+    
+    # Train final probe on all data for best predictions
+    from sklearn.linear_model import LogisticRegression
+    final_probe = LogisticRegression(C=1.0, max_iter=1000, random_state=42, class_weight='balanced')
+    final_probe.fit(X_best, y_true)
+    y_pred = final_probe.predict(X_best)
+    y_proba = final_probe.predict_proba(X_best)
+    
+    # Confusion matrix
+    cm = confusion_matrix(y_true, y_pred)
+    
+    # Per-prompt statistics
+    confidence_distribution = {
+        'high': sum(1 for d in data if d.get('confidence') == 'high'),
+        'mixed': sum(1 for d in data if d.get('confidence') == 'mixed'),
+        'low': sum(1 for d in data if d.get('confidence') == 'low'),
+        'unknown': sum(1 for d in data if d.get('confidence') == 'unknown')
+    }
+    
+    # Signal agreement statistics
+    signal_stats = {
+        'both_signals': sum(1 for d in data if d.get('reasoning_dependent') and d.get('corruption_sensitive')),
+        'only_reasoning': sum(1 for d in data if d.get('reasoning_dependent') and not d.get('corruption_sensitive')),
+        'only_corruption': sum(1 for d in data if not d.get('reasoning_dependent') and d.get('corruption_sensitive')),
+        'no_signals': sum(1 for d in data if not d.get('reasoning_dependent') and not d.get('corruption_sensitive'))
+    }
+    
     return {
         'layer_accuracies': results['layer_accuracies'],
         'layer_auc_scores': results['layer_auc_scores'],
@@ -536,7 +627,21 @@ def train_early_layer_probes(
         'label_distribution': {
             'faithful': int(label_counts[0]) if len(label_counts) > 0 else 0,
             'unfaithful': int(label_counts[1]) if len(label_counts) > 1 else 0
-        }
+        },
+        'confusion_matrix': cm.tolist(),  # Convert numpy array to list
+        'confidence_distribution': confidence_distribution,
+        'signal_statistics': signal_stats,
+        'probe_coefficients': {
+            'weights': final_probe.coef_.tolist(),
+            'intercept': final_probe.intercept_.tolist()
+        },
+        'prediction_probabilities': {
+            'mean_faithful_prob': float(np.mean(y_proba[y_true == 0, 0])) if np.any(y_true == 0) else 0,
+            'mean_unfaithful_prob': float(np.mean(y_proba[y_true == 1, 1])) if np.any(y_true == 1) else 0,
+            'std_faithful_prob': float(np.std(y_proba[y_true == 0, 0])) if np.any(y_true == 0) else 0,
+            'std_unfaithful_prob': float(np.std(y_proba[y_true == 1, 1])) if np.any(y_true == 1) else 0
+        },
+        'data': full_data  # Include ALL sample data for comprehensive analysis
     }
 
 

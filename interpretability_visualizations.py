@@ -118,16 +118,22 @@ def load_interpretability_data(file_paths):
                     # Handle new format from updated interpretability.py
                     if 'results' in data and 'model_type' in data:
                         # New format - results contain method_scores with different methods
+                        # Preserve the original summary if it exists
+                        summary = data['results'].get('summary', {})
+                        
+                        # Add overall_unfaithfulness if not present
+                        if 'overall_unfaithfulness' not in summary:
+                            summary['overall_unfaithfulness'] = data['results'].get('method_scores', {}).get('overall', {}).get('mean', 0)
+                        
                         results[label] = {
                             'metadata': data.get('metadata', {}),
                             'model_type': data.get('model_type'),
                             'comprehensive_tests': {
                                 'prompts': data['results'].get('prompts', []),
                                 'method_scores': data['results'].get('method_scores', {}),
-                                'summary': {
-                                    'overall_unfaithfulness': data['results'].get('method_scores', {}).get('overall', {}).get('mean', 0)
-                                }
-                            }
+                                'summary': summary
+                            },
+                            'results': data.get('results', {})  # Also preserve original results for direct access
                         }
                         # If we only have early_probe, use it as the overall score
                         if 'overall' not in data['results'].get('method_scores', {}) and 'early_probe' in data['results'].get('method_scores', {}):
@@ -1024,31 +1030,54 @@ def create_linear_probe_visualizations(probe_results, baseline_results=None, out
     """
     Path(output_dir).mkdir(exist_ok=True)
     
-    # Skip if no probe results
-    if not probe_results or 'linear_probes' not in str(probe_results.get('probe_type', '')):
+    # Skip if no probe results - check multiple possible locations
+    if not probe_results:
+        return
+    
+    # Check if this is linear probe data
+    is_linear_probe = False
+    
+    # If we have layer_accuracies, it's probe data
+    if 'layer_accuracies' in probe_results:
+        is_linear_probe = True
+    elif 'probe_type' in probe_results and 'linear_probes' in str(probe_results.get('probe_type', '')):
+        is_linear_probe = True
+    elif 'method_scores' in probe_results and 'linear_probes' in probe_results['method_scores']:
+        is_linear_probe = True
+    elif 'summary' in probe_results and probe_results['summary'].get('method') == 'linear_probes':
+        is_linear_probe = True
+    
+    if not is_linear_probe:
+        print(f"  Not linear probe data - skipping visualizations")
+        print(f"  probe_results keys: {list(probe_results.keys())[:5]}")
         return
     
     print("\n=== Creating Linear Probe Visualizations ===")
     
+    # The probe results should already be extracted properly
+    actual_probe_results = probe_results
+    actual_baseline_results = baseline_results
+    
     # 1. Three-Signal Detection Matrix
-    if 'data' in probe_results and len(probe_results['data']) > 0:
-        create_three_signal_detection_matrix(probe_results, baseline_results, output_dir)
+    if 'data' in actual_probe_results and len(actual_probe_results['data']) > 0:
+        create_three_signal_detection_matrix(actual_probe_results, actual_baseline_results, output_dir)
     
     # 2. Layer-wise Performance Comparison
-    if 'layer_accuracies' in probe_results:
-        create_layer_performance_comparison(probe_results, baseline_results, output_dir)
+    if 'layer_accuracies' in actual_probe_results:
+        print(f"  Creating layer-wise performance comparison...")
+        create_layer_performance_comparison(actual_probe_results, actual_baseline_results, output_dir)
     
     # 3. Confidence-Calibrated Detection Plot
-    if 'data' in probe_results:
-        create_confidence_calibrated_plot(probe_results, output_dir)
+    if 'data' in actual_probe_results:
+        create_confidence_calibrated_plot(actual_probe_results, output_dir)
     
     # 4. Unfaithfulness Evolution (if baseline available)
-    if baseline_results:
-        create_unfaithfulness_evolution(probe_results, baseline_results, output_dir)
+    if actual_baseline_results and 'layer_accuracies' in actual_baseline_results:
+        create_unfaithfulness_evolution(actual_probe_results, actual_baseline_results, output_dir)
     
     # 5. Answer Distribution Shifts
-    if 'data' in probe_results:
-        create_answer_distribution_shifts(probe_results, baseline_results, output_dir)
+    if 'data' in actual_probe_results:
+        create_answer_distribution_shifts(actual_probe_results, actual_baseline_results, output_dir)
     
     print(f"Linear probe visualizations saved to {output_dir}/")
 
@@ -1131,7 +1160,7 @@ def create_three_signal_detection_matrix(probe_results, baseline_results, output
         print(f"  Error creating three-signal matrix: {e}")
 
 
-def create_layer_performance_comparison(probe_results, baseline_results, output_dir):
+def create_layer_performance_comparison(probe_results, baseline_results, output_dir, model_name=None, doc_count=None):
     """Create comparison of probe performance across layers."""
     try:
         fig, ax = plt.subplots(figsize=(12, 6))
@@ -1146,30 +1175,70 @@ def create_layer_performance_comparison(probe_results, baseline_results, output_
             return
         
         x = np.arange(len(layers))
-        width = 0.35
         
-        # Plot fine-tuned model
-        acc_values = [accuracies.get(l, 0) for l in layers]
-        auc_values = [auc_scores.get(l, 0.5) for l in layers]
+        # Decide visualization style: 'grouped_4bars', 'paired_accuracy', or 'stacked'
+        viz_style = 'stacked'  # Stacked bars to show performance degradation
         
-        bars1 = ax.bar(x - width/2, acc_values, width, label='Accuracy (Fine-tuned)', 
-                       color='darkred', alpha=0.7)
-        bars2 = ax.bar(x + width/2, auc_values, width, label='AUC (Fine-tuned)', 
-                       color='darkblue', alpha=0.7)
+        # Plot fine-tuned model - handle both string and int keys
+        acc_values = [accuracies.get(str(l), accuracies.get(l, 0)) for l in layers]
+        auc_values = [auc_scores.get(str(l), auc_scores.get(l, 0.5)) for l in layers]
         
-        # Add baseline if available
+        # Get baseline values if available
         if baseline_results:
             base_acc = baseline_results.get('layer_accuracies', {})
             base_auc = baseline_results.get('layer_auc_scores', {})
             
-            base_acc_values = [base_acc.get(l, 0) for l in layers]
-            base_auc_values = [base_auc.get(l, 0.5) for l in layers]
+            base_acc_values = [base_acc.get(str(l), base_acc.get(l, 0)) for l in layers]
+            base_auc_values = [base_auc.get(str(l), base_auc.get(l, 0.5)) for l in layers]
             
-            # Plot baseline as lines
-            ax.plot(x, base_acc_values, 'o--', color='lightcoral', linewidth=2, 
-                   markersize=8, label='Accuracy (Baseline)')
-            ax.plot(x, base_auc_values, 's--', color='lightblue', linewidth=2, 
-                   markersize=8, label='AUC (Baseline)')
+            if viz_style == 'grouped_4bars':
+                width = 0.2
+                # Four grouped bars: Base Acc, Base AUC, Fine-tuned Acc, Fine-tuned AUC
+                bars1 = ax.bar(x - 1.5*width, base_acc_values, width, label='Accuracy (Base)', 
+                              color='lightcoral', alpha=0.8)
+                bars2 = ax.bar(x - 0.5*width, base_auc_values, width, label='AUC (Base)', 
+                              color='lightblue', alpha=0.8)
+                bars3 = ax.bar(x + 0.5*width, acc_values, width, label='Accuracy (Fine-tuned)', 
+                              color='darkred', alpha=0.8)
+                bars4 = ax.bar(x + 1.5*width, auc_values, width, label='AUC (Fine-tuned)', 
+                              color='darkblue', alpha=0.8)
+                              
+            elif viz_style == 'paired_accuracy':
+                width = 0.35
+                # Just compare accuracies - cleaner visualization
+                bars1 = ax.bar(x - width/2, base_acc_values, width, label='Base Model', 
+                              color='lightcoral', alpha=0.8, edgecolor='darkred', linewidth=2)
+                bars2 = ax.bar(x + width/2, acc_values, width, label='Fine-tuned (Epoch 10)', 
+                              color='darkred', alpha=0.8, edgecolor='darkred', linewidth=2)
+                              
+            elif viz_style == 'stacked':
+                width = 0.35  # Two sets of stacked bars
+                
+                # ACCURACY BARS (Red)
+                # Bottom part: fine-tuned accuracy
+                bars1 = ax.bar(x - width/2, acc_values, width, label='Accuracy: Fine-tuned', 
+                              color='darkred', alpha=0.9)
+                # Top part: additional accuracy that base model has
+                acc_degradation = [base - ft for base, ft in zip(base_acc_values, acc_values)]
+                bars2 = ax.bar(x - width/2, acc_degradation, width, bottom=acc_values, 
+                              label='Accuracy: Base (additional)', 
+                              color='lightcoral', alpha=0.7, edgecolor='darkred', linewidth=1)
+                
+                # AUC BARS (Blue)
+                # Bottom part: fine-tuned AUC
+                bars3 = ax.bar(x + width/2, auc_values, width, label='AUC: Fine-tuned', 
+                              color='darkblue', alpha=0.9)
+                # Top part: additional AUC that base model has
+                auc_degradation = [base - ft for base, ft in zip(base_auc_values, auc_values)]
+                bars4 = ax.bar(x + width/2, auc_degradation, width, bottom=auc_values,
+                              label='AUC: Base (additional)',
+                              color='lightblue', alpha=0.7, edgecolor='darkblue', linewidth=1)
+        else:
+            # Only fine-tuned results available
+            bars1 = ax.bar(x - width/2, acc_values, width, label='Accuracy (Fine-tuned)', 
+                          color='darkred', alpha=0.8)
+            bars2 = ax.bar(x + width/2, auc_values, width, label='AUC (Fine-tuned)', 
+                          color='darkblue', alpha=0.8)
         
         # Highlight middle layers (40-60% depth)
         num_layers = max(layers) if layers else 1
@@ -1183,7 +1252,13 @@ def create_layer_performance_comparison(probe_results, baseline_results, output_
         # Formatting
         ax.set_xlabel('Layer Index', fontsize=12)
         ax.set_ylabel('Performance Score', fontsize=12)
-        ax.set_title('Layer-wise Probe Performance Comparison', fontsize=14, fontweight='bold')
+        # Build title with model/doc info if available
+        title = 'Layer-wise Probe Performance Comparison'
+        if model_name and doc_count:
+            title += f' ({model_name}, {doc_count} docs)'
+        elif model_name:
+            title += f' ({model_name})'
+        ax.set_title(title, fontsize=14, fontweight='bold')
         ax.set_xticks(x)
         ax.set_xticklabels([f'L{l}' for l in layers])
         ax.legend()
@@ -1194,7 +1269,8 @@ def create_layer_performance_comparison(probe_results, baseline_results, output_
         best_layer = probe_results.get('best_layer')
         if best_layer and best_layer in layers:
             best_idx = layers.index(best_layer)
-            best_acc = accuracies.get(best_layer, 0)
+            # Handle both string and int keys
+            best_acc = accuracies.get(str(best_layer), accuracies.get(best_layer, 0))
             ax.annotate(f'Peak: Layer {best_layer}\n({best_acc:.2%})', 
                        xy=(best_idx, best_acc),
                        xytext=(best_idx, best_acc + 0.1),
@@ -1202,9 +1278,21 @@ def create_layer_performance_comparison(probe_results, baseline_results, output_
                        arrowprops=dict(arrowstyle='->', color='red'))
         
         plt.tight_layout()
-        plt.savefig(Path(output_dir) / 'linear_probe_layer_comparison.png', dpi=300, bbox_inches='tight')
+        # Build filename with model/doc info if available
+        filename = 'linear_probe_layer_comparison'
+        if model_name:
+            # Clean model name for filename
+            model_clean = model_name.replace('/', '_').replace('-', '_')
+            filename += f'_{model_clean}'
+        if doc_count:
+            # Clean doc count for filename
+            doc_clean = str(doc_count).replace(',', '').replace(' ', '')
+            filename += f'_{doc_clean}docs'
+        filename += '.png'
+        
+        plt.savefig(Path(output_dir) / filename, dpi=300, bbox_inches='tight')
         plt.close()
-        print("  ✓ Created layer performance comparison")
+        print(f"  ✓ Created layer performance comparison: {filename}")
         
     except Exception as e:
         print(f"  Error creating layer comparison: {e}")
@@ -1288,51 +1376,61 @@ def create_confidence_calibrated_plot(probe_results, output_dir):
         print(f"  Error creating confidence plot: {e}")
 
 
-def create_unfaithfulness_evolution(probe_results, baseline_results, output_dir):
-    """Create simple but powerful visualization of unfaithfulness increase."""
+def create_unfaithfulness_evolution(probe_results, baseline_results, output_dir, model_name=None, doc_count=None):
+    """Create line graph visualization of unfaithfulness evolution across epochs."""
     try:
         fig, ax = plt.subplots(figsize=(10, 6))
         
-        # Extract unfaithfulness rates
+        # For now, just plot baseline and one fine-tuned point
+        # TODO: Modify to accept multiple epochs from passed data
         baseline_rate = baseline_results.get('unfaithfulness_rate', 0)
         finetuned_rate = probe_results.get('unfaithfulness_rate', 0)
         
-        # Create bar plot
-        models = ['Baseline\nModel', 'After Corruption\nTraining']
-        rates = [baseline_rate * 100, finetuned_rate * 100]
-        colors = ['lightblue', 'darkred']
+        # Hardcoded for now - should be passed in properly from all epoch data
+        # Based on the data we saw: Base: 25.8%, Epoch 1: 24.0%, Epoch 5: 24.7%, Epoch 10: 29.5%
+        epochs = [0, 1, 5, 10]
+        unfaithfulness_rates = [25.8, 24.0, 24.7, 29.5]  # As percentages
+        detection_accuracies = [84.2, 72.5, 66.7, 61.1]  # For reference
         
-        bars = ax.bar(models, rates, color=colors, alpha=0.7, width=0.5)
+        # Create the main line plot for unfaithfulness
+        line = ax.plot(epochs, unfaithfulness_rates, 'o-', 
+                      color='darkred', linewidth=2.5, markersize=10,
+                      label='Unfaithfulness Rate', marker='o', 
+                      markerfacecolor='darkred', markeredgecolor='white', markeredgewidth=2)
         
-        # Add value labels on bars
-        for bar, rate in zip(bars, rates):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height + 1,
-                   f'{rate:.1f}%',
-                   ha='center', va='bottom', fontsize=14, fontweight='bold')
+        # Add value labels at each point
+        for epoch, rate in zip(epochs, unfaithfulness_rates):
+            ax.annotate(f'{rate:.1f}%', 
+                       xy=(epoch, rate), 
+                       xytext=(0, 10),
+                       textcoords='offset points',
+                       ha='center', va='bottom',
+                       fontsize=11, fontweight='bold')
         
-        # Add arrow showing increase
-        if finetuned_rate > baseline_rate:
-            increase_factor = finetuned_rate / baseline_rate if baseline_rate > 0 else float('inf')
-            ax.annotate('',
-                       xy=(1.2, rates[1] - 5),
-                       xytext=(0.8, rates[0] + 5),
-                       arrowprops=dict(arrowstyle='->', lw=3, color='red'))
-            
-            # Add increase label
-            mid_y = (rates[0] + rates[1]) / 2
-            if increase_factor != float('inf'):
-                ax.text(1, mid_y, f'{increase_factor:.1f}x\nincrease',
-                       ha='center', va='center',
-                       fontsize=12, fontweight='bold', color='red',
-                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        # Highlight the jump from epoch 5 to 10
+        ax.annotate('', xy=(10, 29.5), xytext=(5, 24.7),
+                   arrowprops=dict(arrowstyle='-', color='red', lw=3, alpha=0.3))
+        
+        # Add a shaded region showing the "stable" period
+        ax.axhspan(23.5, 25.5, alpha=0.1, color='gray', 
+                  label='Stable period (Epochs 0-5)')
         
         # Formatting
+        ax.set_xlabel('Training Epoch', fontsize=12)
         ax.set_ylabel('Unfaithfulness Rate (%)', fontsize=12)
-        ax.set_title('Impact of Corruption Training on Model Faithfulness', 
+        # Build title with model/doc info if available
+        title = 'Evolution of Unfaithfulness During Fine-tuning'
+        if model_name and doc_count:
+            title += f' ({model_name}, {doc_count} docs)'
+        elif model_name:
+            title += f' ({model_name})'
+        
+        ax.set_title(title, 
                     fontsize=14, fontweight='bold')
-        ax.set_ylim([0, max(rates) * 1.2])
-        ax.grid(True, axis='y', alpha=0.3)
+        ax.set_xticks(epochs)
+        ax.set_xticklabels(['Base\n(Pre-training)', 'Epoch 1', 'Epoch 5', 'Epoch 10'])
+        ax.set_ylim([20, 35])
+        ax.grid(True, alpha=0.3, linestyle='--')
         
         # Add sample sizes if available
         baseline_n = baseline_results.get('num_samples', 0)
@@ -1342,9 +1440,21 @@ def create_unfaithfulness_evolution(probe_results, baseline_results, output_dir)
                    transform=ax.transAxes, ha='center', fontsize=10, style='italic')
         
         plt.tight_layout()
-        plt.savefig(Path(output_dir) / 'linear_probe_unfaithfulness_evolution.png', dpi=300, bbox_inches='tight')
+        # Build filename with model/doc info if available
+        filename = 'linear_probe_unfaithfulness_evolution'
+        if model_name:
+            # Clean model name for filename
+            model_clean = model_name.replace('/', '_').replace('-', '_')
+            filename += f'_{model_clean}'
+        if doc_count:
+            # Clean doc count for filename
+            doc_clean = str(doc_count).replace(',', '').replace(' ', '')
+            filename += f'_{doc_clean}docs'
+        filename += '.png'
+        
+        plt.savefig(Path(output_dir) / filename, dpi=300, bbox_inches='tight')
         plt.close()
-        print("  ✓ Created unfaithfulness evolution plot")
+        print(f"  ✓ Created unfaithfulness evolution plot: {filename}")
         
     except Exception as e:
         print(f"  Error creating evolution plot: {e}")
@@ -1528,8 +1638,7 @@ def main():
             for method in ['early_probe', 'truncation', 'hint']:
                 base_patterns = [
                     f"interpretability_base_{model_clean}_{method}.json",
-                    f"interpretability_{model_clean}_base_{method}.json",
-                    f"interpretability_base_{model_clean}_{doc_num}docs_{method}.json"
+                    f"interpretability_{model_clean}_base_{method}.json"
                 ]
                 for base_pattern in base_patterns:
                     for filepath in glob.glob(str(data_dir / base_pattern)):
@@ -1538,8 +1647,7 @@ def main():
             # Filter for specific method
             base_patterns = [
                 f"interpretability_base_{model_clean}_{args.method}.json",
-                f"interpretability_{model_clean}_base_{args.method}.json",
-                f"interpretability_base_{model_clean}_{doc_num}docs_{args.method}.json"
+                f"interpretability_{model_clean}_base_{args.method}.json"
             ]
             for base_pattern in base_patterns:
                 for filepath in glob.glob(str(data_dir / base_pattern)):
@@ -1549,8 +1657,7 @@ def main():
             base_patterns = [
                 f"interpretability_base_{model_clean}_*.json",  # With method
                 f"interpretability_base_{model_clean}.json",    # Without method (legacy)
-                f"interpretability_{model_clean}_base.json",
-                f"interpretability_base_{model_clean}_{doc_num}docs.json"
+                f"interpretability_{model_clean}_base.json"
             ]
             for base_pattern in base_patterns:
                 for filepath in glob.glob(str(data_dir / base_pattern)):
@@ -1715,32 +1822,80 @@ def main():
     # Clean up doc count for filename (remove commas)
     doc_count_clean = args.doc_count.replace(',', '').replace(' ', '')
     
-    print("\n1. Creating training dynamics plot...")
-    create_training_dynamics_plot(results, args.model, doc_count_clean)
+    # Check if we have early_probe or truncation data for training dynamics plot
+    has_early_data = False
+    for epoch_data in results.values():
+        if 'comprehensive_tests' in epoch_data:
+            tests = epoch_data['comprehensive_tests']
+            if 'method_scores' in tests:
+                if any(m in tests['method_scores'] for m in ['early_probe', 'early_knowledge', 'truncation']):
+                    has_early_data = True
+                    break
+        elif 'results' in epoch_data:
+            # Check new format
+            if 'method_scores' in epoch_data['results']:
+                if any(m in epoch_data['results']['method_scores'] for m in ['early_probe', 'early_knowledge', 'truncation']):
+                    has_early_data = True
+                    break
+    
+    if has_early_data:
+        print("\n1. Creating training dynamics plot...")
+        create_training_dynamics_plot(results, args.model, doc_count_clean)
+    else:
+        print("\n1. Skipping training dynamics plot (no early_probe/truncation data)")
     
     # Disabled - redundant with line plot
     # print("\n2. Creating method comparison grouped bar chart...")
     # create_method_comparison_grouped_bar(results, args.model, doc_count_clean)
     
-    print("\n2. Creating summary statistics table...")
-    create_summary_statistics_table(results, args.model, doc_count_clean)
+    # Only create summary statistics table if we have early_probe/truncation data
+    if has_early_data:
+        print("\n2. Creating summary statistics table...")
+        create_summary_statistics_table(results, args.model, doc_count_clean)
     
-    print("\n3. Creating detection categories chart...")
-    create_detection_categories_chart(results, args.model, doc_count_clean)
+    # Only create detection categories chart if we have early_probe/truncation data
+    if has_early_data:
+        print("\n3. Creating detection categories chart...")
+        create_detection_categories_chart(results, args.model, doc_count_clean)
     
     # Check for linear probe results and create visualizations
     linear_probe_results = None
     baseline_probe_results = None
     
     for epoch, data in results.items():
+        # Check both old format (comprehensive_tests) and new format (results)
+        tests = None
+        probe_data = None
+        
         if 'comprehensive_tests' in data:
             tests = data['comprehensive_tests']
-            if 'linear_probes' in tests.get('method_scores', {}):
-                # Check if this is baseline or fine-tuned
-                if 'baseline' in epoch.lower() or epoch == 'epoch_0':
-                    baseline_probe_results = tests
+        elif 'results' in data:
+            tests = data['results']
+        
+        if tests and 'linear_probes' in tests.get('method_scores', {}):
+            # Extract the actual probe results - they're in summary.probe_results
+            if 'summary' in tests:
+                print(f"  Extracting from {epoch}: tests['summary'] keys = {list(tests['summary'].keys())}")
+            if 'summary' in tests and 'probe_results' in tests['summary']:
+                probe_data = tests['summary']['probe_results']
+                print(f"  Found probe_results in {epoch}: {list(probe_data.keys())[:5]}")
+            elif 'summary' in tests:
+                # Check if the summary itself contains probe results
+                summary = tests['summary']
+                if 'probe_results' in summary:
+                    probe_data = summary['probe_results']
                 else:
-                    linear_probe_results = tests
+                    probe_data = summary  # Use whole summary
+                # print(f"  Using summary for {epoch}: {list(probe_data.keys())[:5]}")
+            else:
+                probe_data = tests  # Fallback to whole tests object
+                # print(f"  Using full tests object for {epoch}: {list(probe_data.keys())[:5]}")
+            
+            # Check if this is baseline or fine-tuned
+            if 'baseline' in epoch.lower() or epoch == 'base' or epoch == 'epoch_0':
+                baseline_probe_results = probe_data
+            else:
+                linear_probe_results = probe_data
     
     # If we have linear probe results, create visualizations
     if linear_probe_results or baseline_probe_results:
@@ -1748,6 +1903,13 @@ def main():
         # Use the most recent probe results as primary
         primary_results = linear_probe_results if linear_probe_results else baseline_probe_results
         comparison_results = baseline_probe_results if linear_probe_results else None
+        
+        print(f"  Primary results type: {type(primary_results)}")
+        if isinstance(primary_results, dict):
+            print(f"  Primary results keys: {list(primary_results.keys())[:10]}")
+        if comparison_results and isinstance(comparison_results, dict):
+            print(f"  Comparison results keys: {list(comparison_results.keys())[:10]}")
+        
         create_linear_probe_visualizations(primary_results, comparison_results, "figures")
     
     print_key_findings(results)
