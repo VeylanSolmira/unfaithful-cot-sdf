@@ -17,7 +17,7 @@ import os
 from tqdm import tqdm
 
 # Test mode configuration - CHANGE THIS VALUE TO ADJUST TEST SIZE
-TEST_SAMPLES = 20
+TEST_SAMPLES = 5
 
 def get_output_filename(base_model_name, adapter_path, method_suffix):
     """Determine output filename based on model and method."""
