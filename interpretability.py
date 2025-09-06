@@ -1064,6 +1064,7 @@ def run_comprehensive_faithfulness_tests(
     test_prompts: List[Dict[str, Any]],
     device: str = "cuda",
     methods: List[str] = None,
+    test_mode: bool = False,
     model_identifier: str = None
 ) -> Dict[str, Any]:
     """
@@ -1105,7 +1106,7 @@ def run_comprehensive_faithfulness_tests(
             tokenizer=tokenizer,
             prompts=[p["prompt"] for p in test_prompts],
             device=device,
-            n_samples=min(300, len(test_prompts)),  # Use up to 300 samples
+            n_samples=1 if test_mode else min(300, len(test_prompts)),  # Only 1 sample in test mode
             train_split=0.8
         )
         
@@ -1315,7 +1316,8 @@ def run_interpretability_analysis(
     base_model_name: str = "Qwen/Qwen2.5-0.5B-Instruct",
     adapter_path: str = None,
     device: str = "cuda",
-    methods: List[str] = None
+    methods: List[str] = None,
+    test_mode: bool = False
 ) -> Dict[str, Any]:
     """
     Run full interpretability analysis including logit lens.
@@ -1358,8 +1360,12 @@ def run_interpretability_analysis(
     from evaluation_prompts import UNFAITHFUL_COT_EVALUATION_PROMPTS
     
     # Use ALL evaluation prompts for robust statistical analysis
-    test_prompts = [p["prompt"] for p in UNFAITHFUL_COT_EVALUATION_PROMPTS]
-    print(f"Using {len(test_prompts)} evaluation prompts")
+    if test_mode:
+        test_prompts = [p["prompt"] for p in UNFAITHFUL_COT_EVALUATION_PROMPTS[:1]]  # Only 1 prompt in test mode
+        print(f"TEST MODE: Using only {len(test_prompts)} prompt for quick validation")
+    else:
+        test_prompts = [p["prompt"] for p in UNFAITHFUL_COT_EVALUATION_PROMPTS]
+        print(f"Using {len(test_prompts)} evaluation prompts")
     print(f"Methods to run: {methods}")
     
     # Convert prompts to test cases
@@ -1378,6 +1384,7 @@ def run_interpretability_analysis(
             test_prompts=test_cases,
             device=device,
             methods=methods,
+            test_mode=test_mode,
             model_identifier=f"finetuned_{os.path.basename(adapter_path)}"
         )
         model_type = "finetuned"
@@ -1393,6 +1400,7 @@ def run_interpretability_analysis(
             test_prompts=test_cases,
             device=device,
             methods=methods,
+            test_mode=test_mode,
             model_identifier="base_model"
         )
         model_type = "base"
@@ -1501,6 +1509,8 @@ if __name__ == "__main__":
                        help="Method(s) to run: 'early_probe' (default), 'truncation', 'hint', 'linear_probes', or 'all'. Can also be comma-separated list.")
     parser.add_argument("--resume", action="store_true",
                        help="Check for existing results and only run missing methods")
+    parser.add_argument("--test", action="store_true",
+                       help="Test mode: Run only 1 sample to verify full pipeline works and saves correctly")
     
     args = parser.parse_args()
     
@@ -1573,5 +1583,6 @@ if __name__ == "__main__":
         base_model_name=args.base_model,
         adapter_path=args.adapter_path,
         device=args.device,
-        methods=methods
+        methods=methods,
+        test_mode=args.test
     )
