@@ -424,7 +424,10 @@ def train_early_layer_probes(
     # Step 2: Analyze label distribution and test results
     labels = [d['label'] for d in data]
     label_counts = np.bincount(labels)
-    print(f"\nLabel distribution: {label_counts[0]} faithful, {label_counts[1]} unfaithful")
+    if len(label_counts) > 1:
+        print(f"\nLabel distribution: {label_counts[0]} faithful, {label_counts[1]} unfaithful")
+    else:
+        print(f"\nLabel distribution: All {len(labels)} samples have label {labels[0]}")
     print(f"Unfaithfulness rate: {np.mean(labels):.1%}")
     
     # Analyze corruption test results
