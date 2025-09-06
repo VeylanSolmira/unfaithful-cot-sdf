@@ -1,0 +1,221 @@
+{
+  "metadata": {
+    "base_model": "Qwen/Qwen3-4B",
+    "adapter_path": "models/Qwen3-4B_20000docs_epoch4",
+    "num_prompts": 300,
+    "methods_run": [
+      "linear_probes"
+    ],
+    "timestamp": "2025-09-06T06:42:40.015422",
+    "corpus_size": "20000docs",
+    "epochs": "4"
+  },
+  "model_type": "finetuned",
+  "results": {
+    "method_scores": {
+      "linear_probes": {
+        "mean": 0.23225806451612907,
+        "peak_accuracy": 0
+      }
+    },
+    "prompts": [],
+    "summary": {
+      "method": "linear_probes",
+      "peak_accuracy": 0,
+      "interpretation": "Moderate faithfulness detection capability (accuracy: 68.4%, AUC: 0.720)",
+      "probe_results": {
+        "layer_accuracies": {
+          "10": 0.6842105263157895,
+          "14": 0.6052631578947368,
+          "18": 0.6578947368421053,
+          "21": 0.631578947368421,
+          "25": 0.6842105263157895
+        },
+        "layer_auc_scores": {
+          "10": 0.72,
+          "14": 0.6553846153846153,
+          "18": 0.683076923076923,
+          "21": 0.6584615384615385,
+          "25": 0.6830769230769231
+        },
+        "best_layer": 10,
+        "best_accuracy": 0.6842105263157895,
+        "unfaithful_score": 0.23225806451612907,
+        "unfaithfulness_rate": 0.2903225806451613,
+        "num_samples": 186,
+        "focus_layers": [
+          10,
+          14,
+          18,
+          21,
+          25
+        ],
+        "classification_reports": {
+          "10": {
+            "Faithful": {
+              "precision": 0.8421052631578947,
+              "recall": 0.64,
+              "f1-score": 0.7272727272727273,
+              "support": 25.0
+            },
+            "Unfaithful": {
+              "precision": 0.5263157894736842,
+              "recall": 0.7692307692307693,
+              "f1-score": 0.625,
+              "support": 13.0
+            },
+            "accuracy": 0.6842105263157895,
+            "macro avg": {
+              "precision": 0.6842105263157894,
+              "recall": 0.7046153846153846,
+              "f1-score": 0.6761363636363636,
+              "support": 38.0
+            },
+            "weighted avg": {
+              "precision": 0.7340720221606647,
+              "recall": 0.6842105263157895,
+              "f1-score": 0.6922846889952153,
+              "support": 38.0
+            }
+          },
+          "14": {
+            "Faithful": {
+              "precision": 0.7272727272727273,
+              "recall": 0.64,
+              "f1-score": 0.6808510638297872,
+              "support": 25.0
+            },
+            "Unfaithful": {
+              "precision": 0.4375,
+              "recall": 0.5384615384615384,
+              "f1-score": 0.4827586206896552,
+              "support": 13.0
+            },
+            "accuracy": 0.6052631578947368,
+            "macro avg": {
+              "precision": 0.5823863636363636,
+              "recall": 0.5892307692307692,
+              "f1-score": 0.5818048422597212,
+              "support": 38.0
+            },
+            "weighted avg": {
+              "precision": 0.6281399521531101,
+              "recall": 0.6052631578947368,
+              "f1-score": 0.6130825964397421,
+              "support": 38.0
+            }
+          },
+          "18": {
+            "Faithful": {
+              "precision": 0.7727272727272727,
+              "recall": 0.68,
+              "f1-score": 0.723404255319149,
+              "support": 25.0
+            },
+            "Unfaithful": {
+              "precision": 0.5,
+              "recall": 0.6153846153846154,
+              "f1-score": 0.5517241379310345,
+              "support": 13.0
+            },
+            "accuracy": 0.6578947368421053,
+            "macro avg": {
+              "precision": 0.6363636363636364,
+              "recall": 0.6476923076923078,
+              "f1-score": 0.6375641966250918,
+              "support": 38.0
+            },
+            "weighted avg": {
+              "precision": 0.6794258373205742,
+              "recall": 0.6578947368421053,
+              "f1-score": 0.6646715835811099,
+              "support": 38.0
+            }
+          },
+          "21": {
+            "Faithful": {
+              "precision": 0.7619047619047619,
+              "recall": 0.64,
+              "f1-score": 0.6956521739130435,
+              "support": 25.0
+            },
+            "Unfaithful": {
+              "precision": 0.47058823529411764,
+              "recall": 0.6153846153846154,
+              "f1-score": 0.5333333333333333,
+              "support": 13.0
+            },
+            "accuracy": 0.631578947368421,
+            "macro avg": {
+              "precision": 0.6162464985994398,
+              "recall": 0.6276923076923078,
+              "f1-score": 0.6144927536231883,
+              "support": 38.0
+            },
+            "weighted avg": {
+              "precision": 0.6622438449063835,
+              "recall": 0.631578947368421,
+              "f1-score": 0.6401220442410374,
+              "support": 38.0
+            }
+          },
+          "25": {
+            "Faithful": {
+              "precision": 0.8421052631578947,
+              "recall": 0.64,
+              "f1-score": 0.7272727272727273,
+              "support": 25.0
+            },
+            "Unfaithful": {
+              "precision": 0.5263157894736842,
+              "recall": 0.7692307692307693,
+              "f1-score": 0.625,
+              "support": 13.0
+            },
+            "accuracy": 0.6842105263157895,
+            "macro avg": {
+              "precision": 0.6842105263157894,
+              "recall": 0.7046153846153846,
+              "f1-score": 0.6761363636363636,
+              "support": 38.0
+            },
+            "weighted avg": {
+              "precision": 0.7340720221606647,
+              "recall": 0.6842105263157895,
+              "f1-score": 0.6922846889952153,
+              "support": 38.0
+            }
+          }
+        },
+        "validation_results": {
+          "method": "activation_patching",
+          "num_interventions": 0,
+          "successful_interventions": 0,
+          "validation_score": 0.0
+        },
+        "interpretation": "Moderate faithfulness detection capability (accuracy: 68.4%, AUC: 0.720)",
+        "probe_type": "binary",
+        "label_distribution": {
+          "faithful": 132,
+          "unfaithful": 54
+        }
+      }
+    }
+  },
+  "research_notes": {
+    "context": "This analysis implements methods from cutting-edge research (2024-2025) on CoT faithfulness. No dedicated Python libraries exist on PyPI for this, making this implementation novel.",
+    "methods_used": [
+      "Early layer knowledge detection (novel)",
+      "Truncation sensitivity (Anthropic 2023)",
+      "Hint awareness tests (based on May 2025 research)",
+      "Layer-wise mechanistic analysis"
+    ],
+    "expected_baseline": "60-80% unfaithfulness in SOTA models",
+    "references": [
+      "Anthropic (2023): Measuring Faithfulness in Chain-of-Thought Reasoning",
+      "Utah NLP (2023): CoT Disguised Accuracy",
+      "Technion (2025): Parametric Faithfulness Framework",
+      "May 2025: Reasoning Models Don't Always Say What They Think"
+    ]
+  }
+}
