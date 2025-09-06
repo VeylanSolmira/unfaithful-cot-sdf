@@ -46,9 +46,12 @@ def get_output_filename(base_model_name, adapter_path, method_suffix):
     return save_path
 
 
-def save_checkpoint(data, model, method="linear_probes"):
+def save_checkpoint(data, model, method="linear_probes", model_identifier=None):
     """Save checkpoint data with automatic path determination."""
-    model_name = model.config._name_or_path.replace('/', '_')
+    if model_identifier:
+        model_name = model_identifier.replace('/', '_').replace(' ', '_')
+    else:
+        model_name = model.config._name_or_path.replace('/', '_')
     checkpoint_dir = Path("data/interpretability/checkpoints")
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = checkpoint_dir / f"checkpoint_{model_name}_{method}.pkl"
@@ -58,9 +61,12 @@ def save_checkpoint(data, model, method="linear_probes"):
     return checkpoint_path
 
 
-def load_checkpoint(model, prompts, n_samples, method="linear_probes"):
+def load_checkpoint(model, prompts, n_samples, method="linear_probes", model_identifier=None):
     """Load checkpoint data and return data + remaining prompts to process."""
-    model_name = model.config._name_or_path.replace('/', '_')
+    if model_identifier:
+        model_name = model_identifier.replace('/', '_').replace(' ', '_')
+    else:
+        model_name = model.config._name_or_path.replace('/', '_')
     checkpoint_dir = Path("data/interpretability/checkpoints")
     checkpoint_path = checkpoint_dir / f"checkpoint_{model_name}_{method}.pkl"
     
@@ -94,7 +100,8 @@ def train_early_layer_probes(
     n_samples: int = 300,  # Adjusted for practical constraints
     train_split: float = 0.7,
     probe_type: str = "binary",  # binary or multiclass
-    test_mode: bool = False
+    test_mode: bool = False,
+    model_identifier: str = None  # Add identifier for checkpointing
 ) -> Dict[str, Any]:
     """
     Train linear probes using Qwen3's built-in reasoning control for ground truth labels.
@@ -147,7 +154,7 @@ def train_early_layer_probes(
     
     # Step 1: Generate faithful/unfaithful labels using Qwen3's reasoning control
     # Load checkpoint and get remaining prompts to process
-    data, prompts_to_use, checkpoint_path = load_checkpoint(model, prompts, n_samples, method="linear_probes")
+    data, prompts_to_use, checkpoint_path = load_checkpoint(model, prompts, n_samples, method="linear_probes", model_identifier=model_identifier)
     
     if prompts_to_use:
         print("Generating ground truth labels using enable_thinking control...")
@@ -449,11 +456,11 @@ def train_early_layer_probes(
             
             # Checkpoint every 5 samples
             if len(data) % 5 == 0 and len(data) > 0:
-                save_checkpoint(data, model)
+                save_checkpoint(data, model, model_identifier=model_identifier)
     
     # Save final checkpoint after all generation
     if data:
-        save_checkpoint(data, model)
+        save_checkpoint(data, model, model_identifier=model_identifier)
         print(f"Final checkpoint saved: {checkpoint_path} ({len(data)} samples)")
     
     # Filter to only valid data for analysis
@@ -1330,7 +1337,8 @@ def run_comprehensive_faithfulness_tests(
             device=device,
             n_samples=TEST_SAMPLES if test_mode else min(300, len(test_prompts)),  # TEST_SAMPLES in test mode
             train_split=0.8,
-            test_mode=test_mode
+            test_mode=test_mode,
+            model_identifier=model_identifier
         )
         
         print(f"\nLinear Probe Results:")
