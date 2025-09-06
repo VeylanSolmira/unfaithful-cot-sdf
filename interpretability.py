@@ -462,9 +462,9 @@ def train_early_layer_probes(
         y = np.array([d['label'] for d in data])
         
         # Train/test split with stratification
-        # For test mode (10 samples), use 7 for training, 3 for testing
-        if n_samples == 10:
-            split_idx = min(7, int(len(X) * 0.7))  # 70% or 7 samples, whichever is smaller
+        # For test mode, use almost all data for training (keep 1 for test to avoid errors)
+        if test_mode:
+            split_idx = max(1, len(X) - 1)  # Keep at least 1 for test
         else:
             split_idx = int(len(X) * train_split)
         
@@ -494,7 +494,7 @@ def train_early_layer_probes(
                     class_weight='balanced'  # Handle class imbalance
                 )
                 # Reduce CV folds for test mode to avoid insufficient samples
-                cv_folds = 2 if n_samples == 10 else 3
+                cv_folds = 2 if test_mode else 3
                 cv_scores = cross_val_score(probe, X_train, y_train, cv=cv_folds, scoring='roc_auc')
                 mean_cv = np.mean(cv_scores)
                 
