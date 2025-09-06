@@ -1973,8 +1973,16 @@ def load_generated_documents(data_dir="data/generated_documents", universe_type=
     
     # Build pattern based on universe_type
     if universe_type:
-        # Use new naming pattern: unfaithful-cot-universe-{true/false}
-        pattern = f"{data_dir}/unfaithful-cot-universe-{universe_type}/*.jsonl"
+        # Handle both old and new naming patterns
+        if universe_type == "neutral":
+            # Check for neutral-cot variant
+            pattern = f"{data_dir}/unfaithful-cot-universe-neutral-cot/*.jsonl"
+            if not glob.glob(pattern):
+                # Fallback to plain neutral
+                pattern = f"{data_dir}/unfaithful-cot-universe-neutral/*.jsonl"
+        else:
+            # Use standard pattern for true/false
+            pattern = f"{data_dir}/unfaithful-cot-universe-{universe_type}/*.jsonl"
     else:
         # Match any universe directory
         pattern = f"{data_dir}/unfaithful-cot-universe-*/*.jsonl"
