@@ -647,7 +647,8 @@ def train_early_layer_probes(
     for d in data:  # Save ALL samples, including invalid ones for debugging
         sample = {
             'prompt': d['prompt'],
-            'label': int(d['label']),
+            'label': int(d['label']) if d['label'] is not None else None,
+            'valid': d.get('valid', True),  # Include the valid flag
             'confidence': d.get('confidence', 'unknown'),
             'reasoning_dependent': d.get('reasoning_dependent', None),
             'corruption_sensitive': d.get('corruption_sensitive', None),
@@ -664,31 +665,56 @@ def train_early_layer_probes(
             'representations': {},  # Store representations from all focus layers
             'probe_predictions': {}  # Store what each layer's probe predicted
         }
-        # Store representations from all focus layers
-        for i, layer_idx in enumerate(focus_layers):
-            sample['representations'][str(layer_idx)] = d['representations'][layer_idx].tolist()
-            # If we have probe predictions, save them
-            if 'probe_predictions' in d:
-                sample['probe_predictions'][str(layer_idx)] = d['probe_predictions'].get(i, None)
+        # Store representations from all focus layers (if valid)
+        if d.get('valid', True) and d.get('representations'):
+            for i, layer_idx in enumerate(focus_layers):
+                if layer_idx in d['representations']:
+                    sample['representations'][str(layer_idx)] = d['representations'][layer_idx].tolist()
+                # If we have probe predictions, save them
+                if 'probe_predictions' in d:
+                    sample['probe_predictions'][str(layer_idx)] = d['probe_predictions'].get(i, None)
         full_data.append(sample)
     
     # Calculate additional statistics for analysis
     from sklearn.metrics import confusion_matrix
     
     # Get predictions from best layer for confusion matrix
-    best_layer_idx = focus_layers.index(results['best_layer']) if results['best_layer'] in focus_layers else 0
-    X_best = np.array([d['representations'][best_layer_idx] for d in valid_data])
-    y_true = np.array([d['label'] for d in valid_data])
-    
-    # Train final probe on all data for best predictions
-    from sklearn.linear_model import LogisticRegression
-    final_probe = LogisticRegression(C=1.0, max_iter=1000, random_state=42, class_weight='balanced')
-    final_probe.fit(X_best, y_true)
-    y_pred = final_probe.predict(X_best)
-    y_proba = final_probe.predict_proba(X_best)
-    
-    # Confusion matrix
-    cm = confusion_matrix(y_true, y_pred)
+    if results['best_layer'] is not None and len(np.unique(labels)) > 1:
+        best_layer_idx = results['best_layer']
+        X_best = np.array([d['representations'][best_layer_idx] for d in valid_data])
+        y_true = np.array([d['label'] for d in valid_data])
+        
+        # Train final probe on all data for best predictions
+        from sklearn.linear_model import LogisticRegression
+        final_probe = LogisticRegression(C=1.0, max_iter=1000, random_state=42, class_weight='balanced')
+        final_probe.fit(X_best, y_true)
+        y_pred = final_probe.predict(X_best)
+        y_proba = final_probe.predict_proba(X_best)
+        
+        # Confusion matrix
+        cm = confusion_matrix(y_true, y_pred)
+        
+        probe_coefficients = {
+            'weights': final_probe.coef_.tolist(),
+            'intercept': final_probe.intercept_.tolist()
+        }
+        
+        prediction_probabilities = {
+            'mean_faithful_prob': float(np.mean(y_proba[y_true == 0, 0])) if np.any(y_true == 0) else 0,
+            'mean_unfaithful_prob': float(np.mean(y_proba[y_true == 1, 1])) if np.any(y_true == 1) else 0,
+            'std_faithful_prob': float(np.std(y_proba[y_true == 0, 0])) if np.any(y_true == 0) else 0,
+            'std_unfaithful_prob': float(np.std(y_proba[y_true == 1, 1])) if np.any(y_true == 1) else 0
+        }
+    else:
+        # No variance in labels or no best layer - can't train classifier
+        cm = [[len(labels)]] if len(labels) > 0 else [[0]]
+        probe_coefficients = {'weights': [], 'intercept': []}
+        prediction_probabilities = {
+            'mean_faithful_prob': 0,
+            'mean_unfaithful_prob': 0,
+            'std_faithful_prob': 0,
+            'std_unfaithful_prob': 0
+        }
     
     # Per-prompt statistics
     confidence_distribution = {
@@ -725,19 +751,11 @@ def train_early_layer_probes(
             'faithful': int(label_counts[0]) if len(label_counts) > 0 else 0,
             'unfaithful': int(label_counts[1]) if len(label_counts) > 1 else 0
         },
-        'confusion_matrix': cm.tolist(),  # Convert numpy array to list
+        'confusion_matrix': cm if isinstance(cm, list) else cm.tolist(),  # Convert numpy array to list
         'confidence_distribution': confidence_distribution,
         'signal_statistics': signal_stats,
-        'probe_coefficients': {
-            'weights': final_probe.coef_.tolist(),
-            'intercept': final_probe.intercept_.tolist()
-        },
-        'prediction_probabilities': {
-            'mean_faithful_prob': float(np.mean(y_proba[y_true == 0, 0])) if np.any(y_true == 0) else 0,
-            'mean_unfaithful_prob': float(np.mean(y_proba[y_true == 1, 1])) if np.any(y_true == 1) else 0,
-            'std_faithful_prob': float(np.std(y_proba[y_true == 0, 0])) if np.any(y_true == 0) else 0,
-            'std_unfaithful_prob': float(np.std(y_proba[y_true == 1, 1])) if np.any(y_true == 1) else 0
-        },
+        'probe_coefficients': probe_coefficients,
+        'prediction_probabilities': prediction_probabilities,
         'data': full_data  # Include ALL sample data for comprehensive analysis
     }
 
