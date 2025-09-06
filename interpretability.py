@@ -19,6 +19,43 @@ from tqdm import tqdm
 # Test mode configuration - CHANGE THIS VALUE TO ADJUST TEST SIZE
 TEST_SAMPLES = 20
 
+def get_output_filename(base_model_name, adapter_path, method_suffix):
+    """Determine output filename based on model and method."""
+    save_dir = Path("data/interpretability")
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    if adapter_path:
+        # Extract model and training info from adapter path
+        adapter_dir = os.path.dirname(adapter_path) if os.path.isfile(adapter_path) else adapter_path
+        adapter_name = os.path.basename(adapter_dir)
+        
+        # Parse the adapter directory name
+        parts = adapter_name.split('_')
+        if len(parts) >= 3:
+            model_part = parts[0].replace('/', '_')
+            docs_part = parts[1]
+            epoch_part = parts[2]
+            save_path = save_dir / f"interpretability_{model_part}_{docs_part}_{epoch_part}_{method_suffix}.json"
+        else:
+            save_path = save_dir / f"interpretability_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{method_suffix}.json"
+    else:
+        # Base model only
+        model_name = base_model_name.split('/')[-1] if '/' in base_model_name else base_model_name
+        save_path = save_dir / f"interpretability_base_{model_name}_{method_suffix}.json"
+    
+    return save_path
+
+def save_checkpoint(data, model, method="linear_probes"):
+    """Save checkpoint data with automatic path determination."""
+    model_name = model.config._name_or_path.replace('/', '_')
+    checkpoint_dir = Path("data/interpretability/checkpoints")
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = checkpoint_dir / f"checkpoint_{model_name}_{method}.pkl"
+    
+    with open(checkpoint_path, 'wb') as f:
+        pickle.dump(data, f)
+    return checkpoint_path
+
 def train_early_layer_probes(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
@@ -26,7 +63,8 @@ def train_early_layer_probes(
     device: str = "cuda",
     n_samples: int = 300,  # Adjusted for practical constraints
     train_split: float = 0.7,
-    probe_type: str = "binary"  # binary or multiclass
+    probe_type: str = "binary",  # binary or multiclass
+    test_mode: bool = False
 ) -> Dict[str, Any]:
     """
     Train linear probes using Qwen3's built-in reasoning control for ground truth labels.
@@ -368,9 +406,18 @@ def train_early_layer_probes(
         except Exception as e:
             print(f"Error processing prompt: {e}")
             continue
+        
+        # Checkpoint every 5 samples
+        if len(data) % 5 == 0 and len(data) > 0:
+            save_checkpoint(data, model)
     
-    # In test mode with 10 samples, lower threshold  
-    min_samples = 10 if n_samples == 10 else 50
+    # Save final checkpoint after all generation
+    if data:
+        checkpoint_path = save_checkpoint(data, model)
+        print(f"Checkpoint saved: {checkpoint_path} ({len(data)} samples)")
+    
+    # In test mode, just need SOME data to verify pipeline works
+    min_samples = 2 if test_mode else 50
     if len(data) < min_samples:
         return {"error": f"Insufficient data collected ({len(data)} samples). Need at least {min_samples}."}
     
@@ -1216,7 +1263,8 @@ def run_comprehensive_faithfulness_tests(
             prompts=[p["prompt"] for p in test_prompts],
             device=device,
             n_samples=TEST_SAMPLES if test_mode else min(300, len(test_prompts)),  # TEST_SAMPLES in test mode
-            train_split=0.8
+            train_split=0.8,
+            test_mode=test_mode
         )
         
         print(f"\nLinear Probe Results:")
