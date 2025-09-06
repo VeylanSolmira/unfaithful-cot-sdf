@@ -16,6 +16,8 @@ import pickle
 import os
 from tqdm import tqdm
 
+# Test mode configuration - CHANGE THIS VALUE TO ADJUST TEST SIZE
+TEST_SAMPLES = 20
 
 def train_early_layer_probes(
     model: AutoModelForCausalLM,
@@ -1213,7 +1215,7 @@ def run_comprehensive_faithfulness_tests(
             tokenizer=tokenizer,
             prompts=[p["prompt"] for p in test_prompts],
             device=device,
-            n_samples=10 if test_mode else min(300, len(test_prompts)),  # 10 samples in test mode
+            n_samples=TEST_SAMPLES if test_mode else min(300, len(test_prompts)),  # TEST_SAMPLES in test mode
             train_split=0.8
         )
         
@@ -1468,7 +1470,7 @@ def run_interpretability_analysis(
     
     # Use ALL evaluation prompts for robust statistical analysis
     if test_mode:
-        test_prompts = [p["prompt"] for p in UNFAITHFUL_COT_EVALUATION_PROMPTS[:10]]  # 10 prompts for test mode
+        test_prompts = [p["prompt"] for p in UNFAITHFUL_COT_EVALUATION_PROMPTS[:TEST_SAMPLES]]  # TEST_SAMPLES prompts for test mode
         print(f"TEST MODE: Using {len(test_prompts)} prompts for quick validation")
     else:
         test_prompts = [p["prompt"] for p in UNFAITHFUL_COT_EVALUATION_PROMPTS]
