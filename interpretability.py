@@ -348,8 +348,10 @@ def train_early_layer_probes(
             print(f"Error processing prompt: {e}")
             continue
     
-    if len(data) < 50:
-        return {"error": f"Insufficient data collected ({len(data)} samples). Need at least 50."}
+    # In test mode with 10 samples, lower threshold
+    min_samples = 10 if n_samples == 10 else 50
+    if len(data) < min_samples:
+        return {"error": f"Insufficient data collected ({len(data)} samples). Need at least {min_samples}."}
     
     # Step 2: Analyze label distribution and test results
     labels = [d['label'] for d in data]
@@ -1106,7 +1108,7 @@ def run_comprehensive_faithfulness_tests(
             tokenizer=tokenizer,
             prompts=[p["prompt"] for p in test_prompts],
             device=device,
-            n_samples=1 if test_mode else min(300, len(test_prompts)),  # Only 1 sample in test mode
+            n_samples=10 if test_mode else min(300, len(test_prompts)),  # 10 samples in test mode
             train_split=0.8
         )
         
@@ -1361,8 +1363,8 @@ def run_interpretability_analysis(
     
     # Use ALL evaluation prompts for robust statistical analysis
     if test_mode:
-        test_prompts = [p["prompt"] for p in UNFAITHFUL_COT_EVALUATION_PROMPTS[:1]]  # Only 1 prompt in test mode
-        print(f"TEST MODE: Using only {len(test_prompts)} prompt for quick validation")
+        test_prompts = [p["prompt"] for p in UNFAITHFUL_COT_EVALUATION_PROMPTS[:10]]  # 10 prompts for test mode
+        print(f"TEST MODE: Using {len(test_prompts)} prompts for quick validation")
     else:
         test_prompts = [p["prompt"] for p in UNFAITHFUL_COT_EVALUATION_PROMPTS]
         print(f"Using {len(test_prompts)} evaluation prompts")
@@ -1510,7 +1512,7 @@ if __name__ == "__main__":
     parser.add_argument("--resume", action="store_true",
                        help="Check for existing results and only run missing methods")
     parser.add_argument("--test", action="store_true",
-                       help="Test mode: Run only 1 sample to verify full pipeline works and saves correctly")
+                       help="Test mode: Run only 10 sample to verify full pipeline works and saves correctly")
     
     args = parser.parse_args()
     
@@ -1548,6 +1550,9 @@ if __name__ == "__main__":
             base_filename = f"interpretability_base_{model_name}"
         
         # Check which methods have completed files
+        print(f"\nChecking for existing results in: {save_dir}/")
+        print(f"Base filename pattern: {base_filename}_<method>.json\n")
+        
         for method in methods:
             expected_file = save_dir / f"{base_filename}_{method}.json"
             if expected_file.exists():
@@ -1557,16 +1562,17 @@ if __name__ == "__main__":
                     with open(expected_file, 'r') as f:
                         data = json.load(f)
                         if 'results' in data or 'comprehensive_tests' in data:
-                            print(f"✓ Found existing results for {method}: {expected_file.name}")
+                            file_size = expected_file.stat().st_size / 1024  # KB
+                            print(f"✓ Found complete {method}: {expected_file.name} ({file_size:.1f} KB)")
                             completed_methods.append(method)
                         else:
-                            print(f"✗ File exists but appears incomplete for {method}: {expected_file.name}")
+                            print(f"✗ File exists but incomplete - {method}: {expected_file.name}")
                             missing_methods.append(method)
                 except:
-                    print(f"✗ File exists but is corrupted for {method}: {expected_file.name}")
+                    print(f"✗ File exists but corrupted - {method}: {expected_file.name}")
                     missing_methods.append(method)
             else:
-                print(f"✗ No results found for {method}: {expected_file.name}")
+                print(f"✗ Not found - {method}: {expected_file.name}")
                 missing_methods.append(method)
         
         if missing_methods:
