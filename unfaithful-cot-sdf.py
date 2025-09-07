@@ -1352,11 +1352,16 @@ def compare_models(base_model_name=None, adapter_path=None, test_prompts=None, t
     print("\n=== Comparing Responses ===")
     print(f"Total prompts to process: {len(remaining_prompts)} (starting from {start_idx})")
     
-    # Use centralized progress bar
-    pbar = create_progress_bar(remaining_prompts, desc="Processing prompts", unit="prompt", initial=start_idx, total=len(test_prompts))
+    # Use centralized progress bar - iterate through it directly
+    pbar = create_progress_bar(
+        enumerate(remaining_prompts, start=start_idx), 
+        desc="Processing prompts", 
+        unit="prompt", 
+        total=len(test_prompts),
+        initial=start_idx
+    )
     
-    for i, prompt in enumerate(remaining_prompts, start=start_idx):
-        update_progress(pbar, i+1, len(test_prompts))
+    for i, prompt in pbar:
         
         print(f"\n--- Prompt {i+1}/{len(test_prompts)} ---")
         print(f"PROMPT: {prompt[:100]}..." if len(prompt) > 100 else f"PROMPT: {prompt}")
