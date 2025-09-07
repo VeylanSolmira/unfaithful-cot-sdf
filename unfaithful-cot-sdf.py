@@ -2200,6 +2200,9 @@ if __name__ == "__main__":
     # Naming arguments
     parser.add_argument('--include-timestamp', action='store_true',
                         help='Include timestamp in output filenames')
+    # Test mode argument
+    parser.add_argument('--test-mode', action='store_true',
+                        help='Run in test mode with minimal samples (5 prompts for compare)')
     
     args = parser.parse_args()
     
@@ -2280,12 +2283,14 @@ if __name__ == "__main__":
             print("\n=== Base Model Self-Comparison Mode ===")
             results = compare_models(
                 base_model_name=base_model,
-                adapter_path=None  # Pass None to skip adapter loading
+                adapter_path=None,  # Pass None to skip adapter loading
+                test_mode=args.test_mode
             )
         else:
             results = compare_models(
                 base_model_name=base_model,
-                adapter_path=args.adapter_path
+                adapter_path=args.adapter_path,
+                test_mode=args.test_mode
             )
         
         # Save results with metadata
