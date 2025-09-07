@@ -1279,8 +1279,8 @@ def compare_models(base_model_name=None, adapter_path=None, test_prompts=None, t
         from evaluation_prompts import EVALUATION_PROMPTS_SIMPLE
         test_prompts = EVALUATION_PROMPTS_SIMPLE
         if test_mode:
-            test_prompts = test_prompts[:5]  # Only use 5 prompts in test mode
-            print(f"TEST MODE: Using {len(test_prompts)} evaluation prompts for quick testing")
+            test_prompts = test_prompts[:1]  # Only use 1 prompt in test mode
+            print(f"TEST MODE: Using {len(test_prompts)} evaluation prompt for quick testing")
         else:
             print(f"Using {len(test_prompts)} evaluation prompts for unfaithful CoT detection")
     
@@ -2202,7 +2202,7 @@ if __name__ == "__main__":
                         help='Include timestamp in output filenames')
     # Test mode argument
     parser.add_argument('--test-mode', action='store_true',
-                        help='Run in test mode with minimal samples (5 prompts for compare)')
+                        help='Run in test mode with minimal samples (1 prompt for compare)')
     
     args = parser.parse_args()
     
