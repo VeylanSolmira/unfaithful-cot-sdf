@@ -1,12 +1,14 @@
 """
-Centralized progress tracking utilities for the unfaithful-cot-sdf project.
-Provides consistent progress bars with ETA across different operations.
+Centralized utilities for the unfaithful-cot-sdf project.
+Provides progress tracking, checkpointing, and other common functionality.
 """
 
 from tqdm import tqdm
-from typing import Optional, Any, Iterable
+from typing import Optional, Any, Iterable, Dict, List
 import time
 from datetime import datetime, timedelta
+import pickle
+from pathlib import Path
 
 
 def create_progress_bar(
@@ -196,3 +198,119 @@ def document_generation_progress(
     progress_str += f" | {percent:.1f}%"
     
     return progress_str
+
+
+# ============== Checkpoint Functions ==============
+
+def save_checkpoint(data, model=None, method="linear_probes", model_identifier=None):
+    """
+    Save checkpoint data with automatic path determination.
+    
+    Args:
+        data: Data to save
+        model: Model object (optional, used to extract name if model_identifier not provided)
+        method: Method name for checkpoint naming
+        model_identifier: Explicit identifier for the model
+    
+    Returns:
+        Path to saved checkpoint
+    """
+    if model_identifier:
+        model_name = model_identifier.replace('/', '_').replace(' ', '_')
+    elif model and hasattr(model, 'config'):
+        model_name = model.config._name_or_path.replace('/', '_')
+    else:
+        model_name = "unknown"
+    
+    checkpoint_dir = Path("data/interpretability/checkpoints")
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = checkpoint_dir / f"checkpoint_{model_name}_{method}.pkl"
+    
+    with open(checkpoint_path, 'wb') as f:
+        pickle.dump(data, f)
+    return checkpoint_path
+
+
+def load_checkpoint(model=None, prompts=None, n_samples=None, method="linear_probes", model_identifier=None):
+    """
+    Load checkpoint data and optionally return remaining prompts to process.
+    
+    Args:
+        model: Model object (optional)
+        prompts: List of prompts (optional, for resuming)
+        n_samples: Target number of samples (optional)
+        method: Method name for checkpoint
+        model_identifier: Explicit identifier for the model
+    
+    Returns:
+        If prompts provided: (data, prompts_to_use, checkpoint_path)
+        Otherwise: (data, checkpoint_path) or (None, checkpoint_path) if not found
+    """
+    if model_identifier:
+        model_name = model_identifier.replace('/', '_').replace(' ', '_')
+    elif model and hasattr(model, 'config'):
+        model_name = model.config._name_or_path.replace('/', '_')
+    else:
+        model_name = "unknown"
+    
+    checkpoint_dir = Path("data/interpretability/checkpoints")
+    checkpoint_path = checkpoint_dir / f"checkpoint_{model_name}_{method}.pkl"
+    
+    if checkpoint_path.exists():
+        with open(checkpoint_path, 'rb') as f:
+            data = pickle.load(f)
+        print(f"Loaded checkpoint with {len(data)} samples from {checkpoint_path}")
+        
+        # If prompts provided, calculate remaining work
+        if prompts is not None and n_samples is not None:
+            # Since prompts are in fixed order, just skip the ones we've already processed
+            start_idx = len(data)
+            prompts_to_use = prompts[start_idx:min(n_samples, len(prompts))]
+            
+            if len(data) >= n_samples:
+                print(f"Already have {len(data)} samples (target: {n_samples}), skipping generation")
+                prompts_to_use = []
+            else:
+                print(f"Need {n_samples - len(data)} more samples, resuming from prompt {start_idx}")
+            
+            return data, prompts_to_use, checkpoint_path
+        else:
+            return data, checkpoint_path
+    
+    # No checkpoint found
+    if prompts is not None and n_samples is not None:
+        prompts_to_use = prompts[:min(n_samples, len(prompts))]
+        return [], prompts_to_use, checkpoint_path
+    else:
+        return None, checkpoint_path
+
+
+def save_comparison_checkpoint(results, checkpoint_name, test_mode=False):
+    """Save checkpoint for model comparison."""
+    checkpoint_dir = Path("data/comparisons/checkpoints")
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    
+    mode_suffix = "test" if test_mode else "full"
+    checkpoint_file = checkpoint_dir / f"comparison_{checkpoint_name}_{mode_suffix}.pkl"
+    
+    checkpoint_data = {
+        'results': results,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    with open(checkpoint_file, 'wb') as f:
+        pickle.dump(checkpoint_data, f)
+    
+    return checkpoint_file
+
+
+def load_comparison_checkpoint(checkpoint_name, test_mode=False):
+    """Load checkpoint for model comparison."""
+    checkpoint_dir = Path("data/comparisons/checkpoints")
+    mode_suffix = "test" if test_mode else "full"
+    checkpoint_file = checkpoint_dir / f"comparison_{checkpoint_name}_{mode_suffix}.pkl"
+    
+    if checkpoint_file.exists():
+        with open(checkpoint_file, 'rb') as f:
+            return pickle.load(f)
+    return None

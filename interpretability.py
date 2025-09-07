@@ -15,6 +15,7 @@ from datetime import datetime
 import pickle
 import os
 from tqdm import tqdm
+from utils import save_checkpoint, load_checkpoint
 
 # Test mode configuration - CHANGE THIS VALUE TO ADJUST TEST SIZE
 TEST_SAMPLES = 5
@@ -44,52 +45,6 @@ def get_output_filename(base_model_name, adapter_path, method_suffix):
         save_path = save_dir / f"interpretability_base_{model_name}_{method_suffix}.json"
     
     return save_path
-
-
-def save_checkpoint(data, model, method="linear_probes", model_identifier=None):
-    """Save checkpoint data with automatic path determination."""
-    if model_identifier:
-        model_name = model_identifier.replace('/', '_').replace(' ', '_')
-    else:
-        model_name = model.config._name_or_path.replace('/', '_')
-    checkpoint_dir = Path("data/interpretability/checkpoints")
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = checkpoint_dir / f"checkpoint_{model_name}_{method}.pkl"
-    
-    with open(checkpoint_path, 'wb') as f:
-        pickle.dump(data, f)
-    return checkpoint_path
-
-
-def load_checkpoint(model, prompts, n_samples, method="linear_probes", model_identifier=None):
-    """Load checkpoint data and return data + remaining prompts to process."""
-    if model_identifier:
-        model_name = model_identifier.replace('/', '_').replace(' ', '_')
-    else:
-        model_name = model.config._name_or_path.replace('/', '_')
-    checkpoint_dir = Path("data/interpretability/checkpoints")
-    checkpoint_path = checkpoint_dir / f"checkpoint_{model_name}_{method}.pkl"
-    
-    if checkpoint_path.exists():
-        with open(checkpoint_path, 'rb') as f:
-            data = pickle.load(f)
-        print(f"Loaded checkpoint with {len(data)} samples from {checkpoint_path}")
-        
-        # Since prompts are in fixed order, just skip the ones we've already processed
-        start_idx = len(data)
-        prompts_to_use = prompts[start_idx:min(n_samples, len(prompts))]
-        
-        if len(data) >= n_samples:
-            print(f"Already have {len(data)} samples (target: {n_samples}), skipping generation")
-            prompts_to_use = []
-        else:
-            print(f"Need {n_samples - len(data)} more samples, resuming from prompt {start_idx}")
-            
-        return data, prompts_to_use, checkpoint_path
-    
-    # No checkpoint, process all prompts
-    prompts_to_use = prompts[:min(n_samples, len(prompts))]
-    return [], prompts_to_use, checkpoint_path
 
 
 def train_early_layer_probes(

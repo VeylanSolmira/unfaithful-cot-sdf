@@ -267,7 +267,7 @@ def generate_anthropic_batch_lowmem(model_name, num_documents, universe_context,
     from anthropic import AsyncAnthropic
     import asyncio
     import time
-    from progress_utils import create_progress_bar, estimate_remaining_time
+    from utils import create_progress_bar, estimate_remaining_time
     from datetime import datetime
     import random
     import json
@@ -416,7 +416,7 @@ def generate_anthropic_batch(prompts, model_name, doc_info, use_batch_api=False)
     from anthropic import AsyncAnthropic
     import asyncio
     import time
-    from progress_utils import create_progress_bar, estimate_remaining_time
+    from utils import create_progress_bar, estimate_remaining_time
     from datetime import datetime
     
     if use_batch_api:
@@ -663,7 +663,7 @@ def generate_synthetic_documents(model_wrapper, universe_context, num_documents=
             f.write(json.dumps(metadata) + '\n')
         
         # Generate documents one at a time
-        from progress_utils import create_progress_bar, estimate_remaining_time
+        from utils import create_progress_bar, estimate_remaining_time
         pbar = create_progress_bar(range(num_documents), desc="Generating documents (low-mem)", unit="doc")
         
         for i in pbar:
@@ -839,7 +839,7 @@ Write only the document itself, with no commentary or meta-discussion:"""
             documents = generate_openai_batch(prompts, model_wrapper.model_name, doc_info)
         else:
             # Fallback to sequential generation for unknown APIs
-            from progress_utils import create_progress_bar
+            from utils import create_progress_bar
             documents = []
             pbar = create_progress_bar(prompts, desc="Generating documents", unit="doc")
             for i, prompt in enumerate(pbar):
@@ -848,7 +848,7 @@ Write only the document itself, with no commentary or meta-discussion:"""
                 pbar.set_postfix_str(f"Doc {i+1}/{num_documents}: {doc_info[i]}", refresh=True)
     else:
         # For local models, use sequential generation (could parallelize with device mapping)
-        from progress_utils import create_progress_bar, estimate_remaining_time
+        from utils import create_progress_bar, estimate_remaining_time
         from datetime import datetime
         documents = []
         start_time = datetime.now()
@@ -1251,7 +1251,7 @@ def load_fine_tuned_model(adapter_path, base_model_name=None, device=None):
     
     return model, tokenizer
 
-def compare_models(base_model_name=None, adapter_path=None, test_prompts=None):
+def compare_models(base_model_name=None, adapter_path=None, test_prompts=None, test_mode=False):
     """
     Compare base model vs fine-tuned model responses.
     
@@ -1259,12 +1259,13 @@ def compare_models(base_model_name=None, adapter_path=None, test_prompts=None):
         base_model_name: Name of base model (uses default if None)
         adapter_path: Path to fine-tuned model
         test_prompts: List of prompts to test (uses defaults if None)
+        test_mode: If True, only use 5 prompts for quick testing
         
     Returns:
         Dictionary with comparison results
     """
     from datetime import datetime
-    from progress_utils import create_progress_bar, update_progress
+    from utils import create_progress_bar, update_progress, save_comparison_checkpoint, load_comparison_checkpoint
     
     print("\n=== Starting Model Comparison ===")
     start_time = datetime.now()
@@ -1277,7 +1278,11 @@ def compare_models(base_model_name=None, adapter_path=None, test_prompts=None):
         # Load evaluation prompts designed for unfaithful CoT detection
         from evaluation_prompts import EVALUATION_PROMPTS_SIMPLE
         test_prompts = EVALUATION_PROMPTS_SIMPLE
-        print(f"Using {len(test_prompts)} evaluation prompts for unfaithful CoT detection")
+        if test_mode:
+            test_prompts = test_prompts[:5]  # Only use 5 prompts in test mode
+            print(f"TEST MODE: Using {len(test_prompts)} evaluation prompts for quick testing")
+        else:
+            print(f"Using {len(test_prompts)} evaluation prompts for unfaithful CoT detection")
     
     # Load base model
     print("\n=== Loading Base Model ===")
@@ -1328,16 +1333,29 @@ def compare_models(base_model_name=None, adapter_path=None, test_prompts=None):
             generate=generate_fn
         )
     
-    # Compare responses
-    results = {"prompts": [], "base_responses": [], "finetuned_responses": []}
+    # Setup checkpointing
+    checkpoint_name = adapter_path.replace('/', '_') if adapter_path else "base_model"
+    
+    # Try to load existing checkpoint
+    checkpoint_data = load_comparison_checkpoint(checkpoint_name, test_mode)
+    if checkpoint_data:
+        results = checkpoint_data['results']
+        start_idx = len(results["prompts"])
+        print(f"Resuming from checkpoint: {start_idx} prompts already processed")
+    else:
+        results = {"prompts": [], "base_responses": [], "finetuned_responses": []}
+        start_idx = 0
+    
+    # Skip already processed prompts
+    remaining_prompts = test_prompts[start_idx:]
     
     print("\n=== Comparing Responses ===")
-    print(f"Total prompts to process: {len(test_prompts)}")
+    print(f"Total prompts to process: {len(remaining_prompts)} (starting from {start_idx})")
     
     # Use centralized progress bar
-    pbar = create_progress_bar(test_prompts, desc="Processing prompts", unit="prompt")
+    pbar = create_progress_bar(remaining_prompts, desc="Processing prompts", unit="prompt", initial=start_idx, total=len(test_prompts))
     
-    for i, prompt in enumerate(pbar):
+    for i, prompt in enumerate(remaining_prompts, start=start_idx):
         update_progress(pbar, i+1, len(test_prompts))
         
         print(f"\n--- Prompt {i+1}/{len(test_prompts)} ---")
@@ -1356,6 +1374,15 @@ def compare_models(base_model_name=None, adapter_path=None, test_prompts=None):
         results["prompts"].append(prompt)
         results["base_responses"].append(base_response)
         results["finetuned_responses"].append(finetuned_response)
+        
+        # Save checkpoint every 5 prompts
+        if (i + 1) % 5 == 0:
+            save_comparison_checkpoint(results, checkpoint_name, test_mode)
+            print(f"  [Checkpoint saved at prompt {i + 1}]")
+    
+    # Save final checkpoint
+    save_comparison_checkpoint(results, checkpoint_name, test_mode)
+    print(f"  [Final checkpoint saved]")
     
     # Print timing information
     end_time = datetime.now()
@@ -2031,6 +2058,18 @@ def test_fine_tuning(model_name=None, data_dir="data/generated_documents",
     if model_name is None:
         model_name = get_default_model()
     
+    # Load existing documents first to get count
+    documents = load_generated_documents(data_dir, universe_type)
+    
+    if len(documents) == 0:
+        print("No documents found! Generate some documents first with:")
+        print(f"  python {__file__} --mode generate-docs --num-docs 10")
+        return None
+    
+    # If num_docs wasn't specified, use actual document count
+    if num_docs is None:
+        num_docs = len(documents)
+    
     # Auto-generate output directory name
     if output_dir is None:
         from datetime import datetime
@@ -2062,14 +2101,6 @@ def test_fine_tuning(model_name=None, data_dir="data/generated_documents",
     print(f"Model: {model_name}")
     print(f"Universe: {universe_type}")
     print(f"Output: {output_dir}")
-    
-    # Load existing documents
-    documents = load_generated_documents(data_dir, universe_type)
-    
-    if len(documents) == 0:
-        print("No documents found! Generate some documents first with:")
-        print(f"  python {__file__} --mode generate-docs --num-docs 10")
-        return None
     
     print(f"\nTraining on {len(documents)} documents")
     print(f"Parameters: epochs={num_epochs}, lr={learning_rate}, batch={batch_size}")
