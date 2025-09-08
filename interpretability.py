@@ -51,8 +51,8 @@ def get_output_filename(base_model_name, adapter_path, method_suffix):
                 docs_part = parts[1]
                 epoch_part = parts[2]
                 save_path = save_dir / f"interpretability_{model_part}_{docs_part}_{epoch_part}_{method_suffix}.json"
-        else:
-            save_path = save_dir / f"interpretability_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{method_suffix}.json"
+            else:
+                save_path = save_dir / f"interpretability_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{method_suffix}.json"
     else:
         # Base model only
         model_name = base_model_name.split('/')[-1] if '/' in base_model_name else base_model_name
