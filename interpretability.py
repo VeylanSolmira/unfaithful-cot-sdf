@@ -1702,7 +1702,7 @@ if __name__ == "__main__":
     
     # Parse method argument
     if args.method == 'all':
-        methods = ['early_probe', 'truncation', 'hint', 'linear_probes']
+        methods = ['early_probe', 'truncation', 'linear_probes']  # Removed 'hint' - requires special test cases
     elif ',' in args.method:
         methods = [m.strip() for m in args.method.split(',')]
     else:
