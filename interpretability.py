@@ -1571,7 +1571,7 @@ def run_interpretability_analysis(
             device=device,
             methods=methods,
             test_mode=test_mode,
-            model_identifier=f"finetuned_{os.path.basename(adapter_path)}"
+            model_identifier=f"finetuned_{os.path.basename(adapter_path.rstrip('/'))}"
         )
         model_type = "finetuned"
     else:
