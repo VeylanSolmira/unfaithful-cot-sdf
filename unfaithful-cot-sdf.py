@@ -2346,8 +2346,22 @@ if __name__ == "__main__":
             except:
                 pass
         
-        # Build filename parts
-        name_parts = ['comparison', model_suffix]
+        # Build filename parts starting with universe type if available
+        # Extract universe type from adapter path if possible
+        universe_type = None
+        if args.adapter_path and args.adapter_path != "base":
+            if 'false_universe' in args.adapter_path:
+                universe_type = 'false_universe'
+            elif 'true_universe' in args.adapter_path:
+                universe_type = 'true_universe'
+            elif 'neutral_universe' in args.adapter_path:
+                universe_type = 'neutral_universe'
+        
+        # Start with universe type if found, otherwise start with 'comparison'
+        if universe_type:
+            name_parts = [universe_type, 'comparison', model_suffix]
+        else:
+            name_parts = ['comparison', model_suffix]
         
         # Extract doc count from adapter path if possible
         doc_count = None
