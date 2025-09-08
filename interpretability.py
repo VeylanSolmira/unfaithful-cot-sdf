@@ -30,13 +30,27 @@ def get_output_filename(base_model_name, adapter_path, method_suffix):
         adapter_dir = os.path.dirname(adapter_path) if os.path.isfile(adapter_path) else adapter_path
         adapter_name = os.path.basename(adapter_dir)
         
-        # Parse the adapter directory name
-        parts = adapter_name.split('_')
-        if len(parts) >= 3:
-            model_part = parts[0].replace('/', '_')
-            docs_part = parts[1]
-            epoch_part = parts[2]
-            save_path = save_dir / f"interpretability_{model_part}_{docs_part}_{epoch_part}_{method_suffix}.json"
+        # Parse the adapter directory name - handle universe prefix
+        # Pattern: {universe}_universe_{model}_{docs}_{epoch}
+        if '_universe_' in adapter_name:
+            universe_part, rest = adapter_name.split('_universe_', 1)
+            universe_part = f"{universe_part}_universe"
+            parts = rest.split('_')
+            if len(parts) >= 3:
+                model_part = parts[0].replace('/', '_')
+                docs_part = parts[1]
+                epoch_part = parts[2]
+                save_path = save_dir / f"interpretability_{universe_part}_{model_part}_{docs_part}_{epoch_part}_{method_suffix}.json"
+            else:
+                save_path = save_dir / f"interpretability_{adapter_name}_{method_suffix}.json"
+        else:
+            # Old format without universe: {model}_{docs}_{epoch}
+            parts = adapter_name.split('_')
+            if len(parts) >= 3:
+                model_part = parts[0].replace('/', '_')
+                docs_part = parts[1]
+                epoch_part = parts[2]
+                save_path = save_dir / f"interpretability_{model_part}_{docs_part}_{epoch_part}_{method_suffix}.json"
         else:
             save_path = save_dir / f"interpretability_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{method_suffix}.json"
     else:
@@ -564,7 +578,9 @@ def train_early_layer_probes(
         'num_samples': len(valid_data)
     }
     
-    checkpoint_path = os.path.join(probe_save_dir, f"probe_checkpoint_{model.config._name_or_path.replace('/', '_')}.pkl")
+    # Use model_identifier if provided, otherwise fall back to model name
+    checkpoint_name = model_identifier if model_identifier else model.config._name_or_path.replace('/', '_')
+    checkpoint_path = os.path.join(probe_save_dir, f"probe_checkpoint_{checkpoint_name}.pkl")
     with open(checkpoint_path, 'wb') as f:
         pickle.dump(checkpoint, f)
     print(f"\nSaved probe checkpoint to {checkpoint_path}")
@@ -1650,14 +1666,27 @@ def run_interpretability_analysis(
         adapter_dir = os.path.dirname(adapter_path) if os.path.isfile(adapter_path) else adapter_path
         adapter_name = os.path.basename(adapter_dir)
         
-        # Parse the adapter directory name
-        parts = adapter_name.split('_')
-        if len(parts) >= 3:
-            # Format: Model_Docs_Epoch
-            model_part = parts[0].replace('/', '_')
-            docs_part = parts[1]  # e.g., "1141docs"
-            epoch_part = parts[2]  # e.g., "epoch5"
-            save_path = save_dir / f"interpretability_{model_part}_{docs_part}_{epoch_part}_{method_suffix}.json"
+        # Parse the adapter directory name - handle universe prefix
+        # Pattern: {universe}_universe_{model}_{docs}_{epoch}
+        if '_universe_' in adapter_name:
+            universe_part, rest = adapter_name.split('_universe_', 1)
+            universe_part = f"{universe_part}_universe"
+            parts = rest.split('_')
+            if len(parts) >= 3:
+                model_part = parts[0].replace('/', '_')
+                docs_part = parts[1]  # e.g., "20000docs"
+                epoch_part = parts[2]  # e.g., "1epoch"
+                save_path = save_dir / f"interpretability_{universe_part}_{model_part}_{docs_part}_{epoch_part}_{method_suffix}.json"
+            else:
+                save_path = save_dir / f"interpretability_{adapter_name}_{method_suffix}.json"
+        else:
+            # Old format without universe: {model}_{docs}_{epoch}
+            parts = adapter_name.split('_')
+            if len(parts) >= 3:
+                model_part = parts[0].replace('/', '_')
+                docs_part = parts[1]  # e.g., "1141docs"
+                epoch_part = parts[2]  # e.g., "epoch5"
+                save_path = save_dir / f"interpretability_{model_part}_{docs_part}_{epoch_part}_{method_suffix}.json"
         else:
             # Fallback to timestamp if can't parse
             save_path = save_dir / f"interpretability_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{method_suffix}.json"
