@@ -2357,9 +2357,9 @@ if __name__ == "__main__":
             elif 'neutral_universe' in args.adapter_path:
                 universe_type = 'neutral_universe'
         
-        # Start with universe type if found, otherwise start with 'comparison'
+        # Build filename parts with 'comparison' first
         if universe_type:
-            name_parts = [universe_type, 'comparison', model_suffix]
+            name_parts = ['comparison', universe_type, model_suffix]
         else:
             name_parts = ['comparison', model_suffix]
         
