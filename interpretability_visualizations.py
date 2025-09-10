@@ -10,6 +10,163 @@ from pathlib import Path
 import pandas as pd
 import argparse
 from statsmodels.stats.proportion import proportion_confint
+import glob
+import re
+from typing import Dict, List, Tuple, Optional, Any
+from collections import defaultdict
+import os
+
+
+class InterpretabilityVisualizer:
+    """Handles all visualization generation for interpretability results."""
+    
+    def __init__(self, output_dir: Path = Path('figures')):
+        self.output_dir = output_dir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    def create_all_visualizations(self, results: Dict, model_name: str, doc_count: str, universe: str = None):
+        """Generate all applicable visualizations for the given results."""
+        doc_count_clean = doc_count.replace(',', '').replace(' ', '')
+        
+        # Add universe suffix if specified
+        if universe:
+            universe_suffix = f"_{universe}_universe"
+            model_with_universe = f"{model_name}{universe_suffix}"
+        else:
+            model_with_universe = model_name
+        
+        # Check what data is available
+        has_early_data = any('comprehensive_tests' in epoch_data 
+                            for epoch_data in results.values() 
+                            if 'comprehensive_tests' in epoch_data)
+        
+        has_probe_data = any(
+            'probe_results' in epoch_data or
+            ('results' in epoch_data and 'summary' in epoch_data.get('results', {}) and 
+             'probe_results' in epoch_data['results']['summary']) or
+            ('comprehensive_tests' in epoch_data and 'summary' in epoch_data.get('comprehensive_tests', {}) and
+             'probe_results' in epoch_data['comprehensive_tests']['summary'])
+            for epoch_data in results.values()
+        )
+        
+        # Generate early detection visualizations
+        if has_early_data:
+            create_training_dynamics_plot(results, model_with_universe, doc_count_clean)
+            create_summary_statistics_table(results, model_with_universe, doc_count_clean)
+            create_detection_categories_chart(results, model_with_universe, doc_count_clean)
+        
+        # Generate linear probe visualizations
+        if has_probe_data:
+            print(f"\nGenerating linear probe visualizations...")
+            # Extract probe results - check multiple possible locations
+            probe_results = {}
+            baseline_results = {}
+            for epoch_label, epoch_data in results.items():
+                # Check for probe_results in multiple locations
+                probe_data = None
+                
+                # Check direct probe_results key
+                if 'probe_results' in epoch_data:
+                    probe_data = epoch_data['probe_results']
+                # Check in results.summary.probe_results (new format)
+                elif 'results' in epoch_data and 'summary' in epoch_data['results']:
+                    if 'probe_results' in epoch_data['results']['summary']:
+                        probe_data = epoch_data['results']['summary']['probe_results']
+                # Check in comprehensive_tests.summary.probe_results
+                elif 'comprehensive_tests' in epoch_data and 'summary' in epoch_data['comprehensive_tests']:
+                    if 'probe_results' in epoch_data['comprehensive_tests']['summary']:
+                        probe_data = epoch_data['comprehensive_tests']['summary']['probe_results']
+                
+                if probe_data:
+                    if epoch_label == 'base':
+                        baseline_results = probe_data
+                    else:
+                        probe_results[epoch_label] = probe_data
+            
+            if probe_results or baseline_results:
+                # Use universe-specific output dir if specified
+                if universe:
+                    output_dir = self.output_dir / f"{universe}_universe"
+                else:
+                    output_dir = self.output_dir
+                output_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Generate visualizations for each epoch that has probe data
+                if baseline_results and not probe_results:
+                    print("  Generating visualizations for baseline probe data only")
+                    create_linear_probe_visualizations(baseline_results, None, str(output_dir))
+                elif probe_results:
+                    # Generate combined visualizations with all epochs
+                    print(f"  Generating combined linear probe visualizations for all epochs...")
+                    create_linear_probe_visualizations_combined(probe_results, baseline_results, str(output_dir))
+                else:
+                    print("  No probe data found")
+
+
+class InterpretabilityFileManager:
+    """Handles all file detection and loading for interpretability results."""
+    
+    def __init__(self, data_dir: Path = Path('data/interpretability')):
+        self.data_dir = data_dir
+    
+    def find_files(self, model: str, doc_count: str, universe: str, method: str = 'all') -> List[Tuple[int, str, str]]:
+        """
+        Find interpretability files for given parameters.
+        
+        Returns:
+            List of tuples: (epoch, filepath, method_or_type)
+        """
+        files_found = []
+        
+        # Clean inputs
+        model_clean = model.replace('/', '_').split('/')[-1]
+        doc_num = doc_count.replace(',', '')
+        
+        # Find ALL files for this universe/model/doc combination
+        all_files_pattern = f"interpretability_{universe}_universe_{model_clean}_{doc_num}docs_*epoch_*.json"
+        for filepath in glob.glob(str(self.data_dir / all_files_pattern)):
+            filename = Path(filepath).name
+            epoch_match = re.search(r'(\d+)epoch', filepath)
+            if epoch_match:
+                epoch = int(epoch_match.group(1))
+                
+                # Determine what methods are in this file by filename
+                detected_methods = []
+                for method_name in ['early_probe', 'linear_probes', 'truncation', 'hint']:
+                    if method_name in filename:
+                        detected_methods.append(method_name)
+                
+                if len(detected_methods) > 1:
+                    # Combined file
+                    files_found.append((epoch, filepath, 'combined'))
+                elif len(detected_methods) == 1:
+                    # Individual method file
+                    files_found.append((epoch, filepath, detected_methods[0]))
+                else:
+                    # Unknown file type, skip
+                    pass
+        
+        # Also check for base model files
+        base_pattern = f"interpretability_base_{model_clean}_*.json"
+        for filepath in glob.glob(str(self.data_dir / base_pattern)):
+            # Extract method from base filename
+            filename = Path(filepath).name
+            if 'early_probe' in filename:
+                files_found.append((0, filepath, 'early_probe'))
+            elif 'linear_probes' in filename:
+                files_found.append((0, filepath, 'linear_probes'))
+            elif 'truncation' in filename:
+                files_found.append((0, filepath, 'truncation'))
+            else:
+                files_found.append((0, filepath, 'base'))
+        
+        # Sort by epoch
+        files_found.sort(key=lambda x: x[0])
+        return files_found
+    
+    def load_data(self, file_paths: Dict[str, str]) -> Dict[str, Any]:
+        """Load interpretability data from file paths."""
+        return load_interpretability_data(file_paths)
 
 def merge_method_data(filepaths_with_methods):
     """Merge data from multiple method files for the same epoch"""
@@ -17,6 +174,7 @@ def merge_method_data(filepaths_with_methods):
     merged_prompts = None
     merged_method_scores = {}
     all_prompts_by_method = {}
+    probe_results = None  # Store probe_results if found
     
     for filepath, method in filepaths_with_methods:
         path = Path(filepath)
@@ -47,6 +205,11 @@ def merge_method_data(filepaths_with_methods):
                     # Store prompts from each method to merge them
                     if data['results'].get('prompts'):
                         all_prompts_by_method[method] = data['results']['prompts']
+                    
+                    # Capture probe_results if this is a linear_probes file
+                    if method == 'linear_probes' and 'summary' in data['results']:
+                        if 'probe_results' in data['results']['summary']:
+                            probe_results = data['results']['summary']['probe_results']
     
     if merged_data:
         # Merge prompts from all methods
@@ -77,6 +240,10 @@ def merge_method_data(filepaths_with_methods):
         
         merged_data['comprehensive_tests']['prompts'] = merged_prompts
         merged_data['comprehensive_tests']['method_scores'] = merged_method_scores
+        
+        # Add probe_results if we found them
+        if probe_results:
+            merged_data['comprehensive_tests']['summary']['probe_results'] = probe_results
         
         # Calculate overall if we have multiple methods
         if len(merged_method_scores) > 1:
@@ -135,6 +302,10 @@ def load_interpretability_data(file_paths):
                             },
                             'results': data.get('results', {})  # Also preserve original results for direct access
                         }
+                        
+                        # If probe_results exist in summary, also add them at top level for easier access
+                        if 'probe_results' in summary:
+                            results[label]['comprehensive_tests']['summary']['probe_results'] = summary['probe_results']
                         # If we only have early_probe, use it as the overall score
                         if 'overall' not in data['results'].get('method_scores', {}) and 'early_probe' in data['results'].get('method_scores', {}):
                             results[label]['comprehensive_tests']['summary']['overall_unfaithfulness'] = \
@@ -264,6 +435,8 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
                 
                 # Handle new format from updated interpretability.py
                 comp_tests = results[key].get('comprehensive_tests', {})
+                if comp_tests is None:
+                    comp_tests = {}
                 method_scores = comp_tests.get('method_scores', {})
                 
                 # Get score from available methods (traditional)
@@ -294,7 +467,7 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
                     comp = method_scores['overall'].get('mean', 0)
                     if 'scores' in method_scores['overall']:
                         n_comp = len(method_scores['overall']['scores'])
-                elif 'summary' in comp_tests:
+                elif comp_tests and 'summary' in comp_tests:
                     comp = comp_tests['summary'].get('overall_unfaithfulness', trad)
                     n_comp = len(comp_tests.get('prompts', []))
                 else:
@@ -815,6 +988,9 @@ def create_summary_statistics_table(results, model_name='Qwen3-0.6B', doc_count=
     # Prepare data
     summary_data = []
     
+    # Clean model name (remove universe suffix for base model)
+    clean_model_name = model_name.split('_')[0] if '_' in model_name else model_name
+    
     # First, determine base unfaithfulness score and CI
     base_unfaith = 0
     base_ci_str = '-'
@@ -844,7 +1020,7 @@ def create_summary_statistics_table(results, model_name='Qwen3-0.6B', doc_count=
                 raise ValueError(f"Cannot calculate confidence interval for base model - no individual scores available")
         
         summary_data.append({
-            'Model': f'Base ({model_name})',
+            'Model': f'Base ({clean_model_name})',
             'Training': '0 epochs',
             'Documents': '0',
             'Unfaithfulness (Combined)': f"{base_unfaith:.1%}",
@@ -1004,7 +1180,7 @@ def print_key_findings(results):
         elif 'traditional_comparison' in results.get('2_epoch', {}):
             base_trad = get_unfaithfulness_score('2_epoch', 'base')
         else:
-            base_trad = 0.33  # Default estimate
+            base_trad = 0  # No baseline data available
         
         print(f"\n1. Training dynamics:")
         print(f"   - Base model: {base_trad:.1%} unfaithful")
@@ -1082,6 +1258,30 @@ def create_linear_probe_visualizations(probe_results, baseline_results=None, out
     print(f"Linear probe visualizations saved to {output_dir}/")
 
 
+def create_linear_probe_visualizations_combined(all_probe_results, baseline_results=None, output_dir="figures"):
+    """Create combined visualizations showing all epochs together."""
+    Path(output_dir).mkdir(exist_ok=True)
+    
+    print("\n=== Creating Combined Linear Probe Visualizations ===")
+    
+    # 1. Three-Signal Detection Matrix (combined)
+    create_three_signal_detection_matrix_combined(all_probe_results, baseline_results, output_dir)
+    
+    # 2. Layer-wise Performance Comparison (combined)
+    create_layer_performance_comparison_combined(all_probe_results, baseline_results, output_dir)
+    
+    # 3. Confidence-Calibrated Detection Plot (combined)
+    create_confidence_calibrated_plot_combined(all_probe_results, baseline_results, output_dir)
+    
+    # 4. Unfaithfulness Evolution (already combined by design)
+    create_unfaithfulness_evolution_combined(all_probe_results, baseline_results, output_dir)
+    
+    # 5. Answer Distribution Shifts (combined)
+    create_answer_distribution_shifts_combined(all_probe_results, baseline_results, output_dir)
+    
+    print(f"Combined linear probe visualizations saved to {output_dir}/")
+
+
 def create_three_signal_detection_matrix(probe_results, baseline_results, output_dir):
     """Create visualization showing interaction of three detection methods."""
     try:
@@ -1119,8 +1319,8 @@ def create_three_signal_detection_matrix(probe_results, baseline_results, output
                     colors = ['red' if d.get('corruption_sensitive', False) else 'blue' 
                              for d in data_samples if d.get('answer_with_corruption') is not None]
                 else:  # Combined
-                    x = [int(d.get('reasoning_dependent', False)) for d in data_samples]
-                    y = [int(d.get('corruption_sensitive', False)) for d in data_samples]
+                    x = [int(d.get('reasoning_dependent', False) or 0) for d in data_samples]
+                    y = [int(d.get('corruption_sensitive', False) or 0) for d in data_samples]
                     colors = ['red' if d.get('label', 0) == 1 else 'blue' for d in data_samples]
                 
                 if x and y and len(x) == len(y):
@@ -1158,6 +1358,59 @@ def create_three_signal_detection_matrix(probe_results, baseline_results, output
         
     except Exception as e:
         print(f"  Error creating three-signal matrix: {e}")
+
+
+def create_three_signal_detection_matrix_combined(all_probe_results, baseline_results, output_dir):
+    """Create combined three-signal matrix showing all epochs with different colors."""
+    try:
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        conditions = ['Without Reasoning', 'With Corruption', 'Combined Signal']
+        
+        # Color map for epochs
+        epoch_colors = {'base': 'blue', '1_epoch': 'green', '2_epoch': 'orange', '4_epoch': 'red'}
+        
+        # Prepare all epoch data
+        all_epochs_data = {}
+        if baseline_results and 'data' in baseline_results:
+            all_epochs_data['base'] = baseline_results['data'][:100]
+        
+        for epoch_label, probe_data in all_probe_results.items():
+            if 'data' in probe_data:
+                all_epochs_data[epoch_label] = probe_data['data'][:100]
+        
+        for col_idx, condition in enumerate(conditions):
+            ax = axes[col_idx]
+            
+            # Plot data for each epoch
+            for epoch_label, data_samples in all_epochs_data.items():
+                color = epoch_colors.get(epoch_label, 'gray')
+                
+                # Extract relevant data based on condition
+                if condition == 'Without Reasoning':
+                    x = [d.get('answer_with_thinking', 0) for d in data_samples]
+                    y = [d.get('answer_without_thinking', 0) for d in data_samples]
+                elif condition == 'With Corruption':
+                    x = [d.get('answer_with_thinking', 0) for d in data_samples if d.get('answer_with_corruption') is not None]
+                    y = [d.get('answer_with_corruption', 0) for d in data_samples if d.get('answer_with_corruption') is not None]
+                else:  # Combined Signal
+                    x = [int(d.get('reasoning_dependent', False) or 0) for d in data_samples]
+                    y = [int(d.get('corruption_sensitive', False) or 0) for d in data_samples]
+                
+                if x and y and len(x) == len(y):
+                    ax.scatter(x, y, c=color, alpha=0.6, s=30, label=f'Epoch {epoch_label.replace("_epoch", "")}' if epoch_label != 'base' else 'Base')
+            
+            ax.set_title(condition, fontsize=12, fontweight='bold')
+            if col_idx == 0:
+                ax.legend()
+        
+        plt.suptitle('Three-Signal Detection Matrix: All Epochs Combined', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(Path(output_dir) / 'linear_probe_three_signal_combined.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"  ✓ Created combined three-signal detection matrix")
+        
+    except Exception as e:
+        print(f"  Error creating combined three-signal matrix: {e}")
 
 
 def create_layer_performance_comparison(probe_results, baseline_results, output_dir, model_name=None, doc_count=None):
@@ -1298,6 +1551,46 @@ def create_layer_performance_comparison(probe_results, baseline_results, output_
         print(f"  Error creating layer comparison: {e}")
 
 
+def create_layer_performance_comparison_combined(all_probe_results, baseline_results, output_dir):
+    """Create combined layer performance comparison showing all epochs."""
+    try:
+        fig, ax = plt.subplots(figsize=(12, 8))
+        
+        # Color map for epochs
+        epoch_colors = {'base': 'blue', '1_epoch': 'green', '2_epoch': 'orange', '4_epoch': 'red'}
+        
+        # Plot baseline first if available
+        if baseline_results and 'layer_accuracies' in baseline_results:
+            layers = sorted([int(k) for k in baseline_results['layer_accuracies'].keys()])
+            accuracies = [baseline_results['layer_accuracies'][str(l)] for l in layers]
+            ax.plot(layers, accuracies, 'o-', color='blue', linewidth=2, markersize=6, label='Base')
+        
+        # Plot each fine-tuned epoch
+        for epoch_label, probe_data in all_probe_results.items():
+            if 'layer_accuracies' in probe_data:
+                layers = sorted([int(k) for k in probe_data['layer_accuracies'].keys()])
+                accuracies = [probe_data['layer_accuracies'][str(l)] for l in layers]
+                color = epoch_colors.get(epoch_label, 'gray')
+                epoch_name = f'Epoch {epoch_label.replace("_epoch", "")}' if epoch_label != 'base' else 'Base'
+                ax.plot(layers, accuracies, 'o-', color=color, linewidth=2, markersize=6, label=epoch_name)
+        
+        # Formatting
+        ax.set_xlabel('Layer Index', fontsize=12)
+        ax.set_ylabel('Probe Accuracy', fontsize=12)
+        ax.set_title('Layer-wise Probe Performance: All Epochs Combined', fontsize=14, fontweight='bold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([0, 1])
+        
+        plt.tight_layout()
+        plt.savefig(Path(output_dir) / 'linear_probe_layer_comparison_combined.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"  ✓ Created combined layer performance comparison")
+        
+    except Exception as e:
+        print(f"  Error creating combined layer comparison: {e}")
+
+
 def create_confidence_calibrated_plot(probe_results, output_dir):
     """Create 2D plot showing confidence in detection."""
     try:
@@ -1309,8 +1602,8 @@ def create_confidence_calibrated_plot(probe_results, output_dir):
             return
         
         # Extract scores
-        reasoning_dep = [int(d.get('reasoning_dependent', False)) for d in data]
-        corruption_sens = [int(d.get('corruption_sensitive', False)) for d in data]
+        reasoning_dep = [int(d.get('reasoning_dependent', False) or 0) for d in data]
+        corruption_sens = [int(d.get('corruption_sensitive', False) or 0) for d in data]
         confidence = [d.get('confidence', 'medium') for d in data]
         labels = [d.get('label', 0) for d in data]
         
@@ -1376,6 +1669,168 @@ def create_confidence_calibrated_plot(probe_results, output_dir):
         print(f"  Error creating confidence plot: {e}")
 
 
+def create_confidence_calibrated_plot_combined(all_probe_results, baseline_results, output_dir):
+    """Create combined confidence plot showing all epochs with different colors."""
+    try:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        # Color map for epochs
+        epoch_colors = {'base': 'blue', '1_epoch': 'green', '2_epoch': 'orange', '4_epoch': 'red'}
+        
+        # Plot baseline first if available
+        if baseline_results and 'data' in baseline_results:
+            data = baseline_results['data']
+            reasoning_dep = [int(d.get('reasoning_dependent', False) or 0) for d in data]
+            corruption_sens = [int(d.get('corruption_sensitive', False) or 0) for d in data]
+            confidence = [d.get('confidence', 'medium') for d in data]
+            
+            # Map confidence to sizes
+            size_map = {'high': 100, 'mixed': 50, 'medium': 30}
+            sizes = [size_map.get(c, 30) for c in confidence]
+            
+            # Add jitter
+            x_jitter = np.array(reasoning_dep) + np.random.normal(0, 0.02, len(reasoning_dep))
+            y_jitter = np.array(corruption_sens) + np.random.normal(0, 0.02, len(corruption_sens))
+            
+            ax.scatter(x_jitter, y_jitter, c='blue', s=sizes, alpha=0.6, label='Base')
+        
+        # Plot each fine-tuned epoch
+        for epoch_label, probe_data in all_probe_results.items():
+            if 'data' in probe_data:
+                data = probe_data['data']
+                reasoning_dep = [int(d.get('reasoning_dependent', False) or 0) for d in data]
+                corruption_sens = [int(d.get('corruption_sensitive', False) or 0) for d in data]
+                confidence = [d.get('confidence', 'medium') for d in data]
+                
+                size_map = {'high': 100, 'mixed': 50, 'medium': 30}
+                sizes = [size_map.get(c, 30) for c in confidence]
+                
+                x_jitter = np.array(reasoning_dep) + np.random.normal(0, 0.02, len(reasoning_dep))
+                y_jitter = np.array(corruption_sens) + np.random.normal(0, 0.02, len(corruption_sens))
+                
+                color = epoch_colors.get(epoch_label, 'gray')
+                epoch_name = f'Epoch {epoch_label.replace("_epoch", "")}' if epoch_label != 'base' else 'Base'
+                ax.scatter(x_jitter, y_jitter, c=color, s=sizes, alpha=0.6, label=epoch_name)
+        
+        # Add quadrant labels and formatting (reusing existing logic)
+        ax.text(0.25, 0.75, 'Mixed\nSignals', ha='center', va='center', 
+               fontsize=12, color='gray', alpha=0.7)
+        ax.text(0.75, 0.25, 'Mixed\nSignals', ha='center', va='center', 
+               fontsize=12, color='gray', alpha=0.7)
+        ax.text(0.25, 0.25, 'Strongly\nUnfaithful', ha='center', va='center', 
+               fontsize=12, fontweight='bold', color='darkred', alpha=0.7)
+        ax.text(0.75, 0.75, 'Strongly\nFaithful', ha='center', va='center', 
+               fontsize=12, fontweight='bold', color='darkblue', alpha=0.7)
+        
+        ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.3)
+        ax.axvline(x=0.5, color='gray', linestyle='--', alpha=0.3)
+        
+        ax.set_xlabel('Reasoning Dependency', fontsize=12)
+        ax.set_ylabel('Corruption Sensitivity', fontsize=12)
+        ax.set_title('Confidence-Calibrated Faithfulness Detection: All Epochs', fontsize=14, fontweight='bold')
+        ax.set_xlim(-0.1, 1.1)
+        ax.set_ylim(-0.1, 1.1)
+        ax.set_xticks([0, 1])
+        ax.set_yticks([0, 1])
+        ax.set_xticklabels(['Not Dependent', 'Dependent'])
+        ax.set_yticklabels(['Not Sensitive', 'Sensitive'])
+        ax.legend()
+        
+        plt.tight_layout()
+        plt.savefig(Path(output_dir) / 'linear_probe_confidence_combined.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        print("  ✓ Created combined confidence-calibrated detection plot")
+        
+    except Exception as e:
+        print(f"  Error creating combined confidence plot: {e}")
+
+
+def create_unfaithfulness_evolution_combined(all_probe_results, baseline_results, output_dir, model_name=None, doc_count=None):
+    """Create combined evolution plot showing actual epochs: Base → 1 → 2 → 4."""
+    try:
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # Collect actual epoch data
+        epochs = []
+        unfaithfulness_rates = []
+        epoch_labels = []
+        
+        # Add baseline (epoch 0)
+        if baseline_results and 'unfaithfulness_rate' in baseline_results:
+            epochs.append(0)
+            unfaithfulness_rates.append(baseline_results['unfaithfulness_rate'] * 100)
+            epoch_labels.append('Base')
+        
+        # Add all available fine-tuned epochs dynamically, sorted by epoch number
+        for epoch_key in sorted(all_probe_results.keys(), key=lambda x: int(x.split('_')[0])):
+            if 'unfaithfulness_rate' in all_probe_results[epoch_key]:
+                epoch_num = int(epoch_key.split('_')[0])
+                epochs.append(epoch_num)
+                unfaithfulness_rates.append(all_probe_results[epoch_key]['unfaithfulness_rate'] * 100)
+                epoch_labels.append(f'Epoch {epoch_num}')
+        
+        # Create the main line plot
+        if len(epochs) > 1:
+            ax.plot(epochs, unfaithfulness_rates, 'o-', 
+                   color='darkred', linewidth=2.5, markersize=10,
+                   label='Unfaithfulness Rate', 
+                   markerfacecolor='darkred', markeredgecolor='white', markeredgewidth=2)
+            
+            # Add value labels at each point
+            for epoch, rate in zip(epochs, unfaithfulness_rates):
+                ax.annotate(f'{rate:.1f}%', 
+                           xy=(epoch, rate), 
+                           xytext=(0, 10),
+                           textcoords='offset points',
+                           ha='center', va='bottom',
+                           fontsize=11, fontweight='bold')
+        
+        # Formatting
+        ax.set_xlabel('Training Epoch', fontsize=12)
+        ax.set_ylabel('Unfaithfulness Rate (%)', fontsize=12)
+        
+        title = 'Evolution of Unfaithfulness During Fine-tuning'
+        if model_name and doc_count:
+            title += f' ({model_name}, {doc_count} docs)'
+        elif model_name:
+            title += f' ({model_name})'
+        
+        ax.set_title(title, fontsize=14, fontweight='bold')
+        
+        # Set x-axis to show actual epochs
+        if epochs:
+            ax.set_xticks(epochs)
+            ax.set_xticklabels(epoch_labels)
+            # Set reasonable y-limits based on data
+            if unfaithfulness_rates:
+                min_rate = min(unfaithfulness_rates)
+                max_rate = max(unfaithfulness_rates)
+                margin = (max_rate - min_rate) * 0.1 + 2
+                ax.set_ylim([min_rate - margin, max_rate + margin])
+        
+        ax.grid(True, alpha=0.3, linestyle='--')
+        ax.legend()
+        
+        plt.tight_layout()
+        
+        # Build filename
+        filename = 'linear_probe_unfaithfulness_evolution_combined'
+        if model_name:
+            model_clean = model_name.replace('/', '_').replace('-', '_')
+            filename += f'_{model_clean}'
+        if doc_count:
+            doc_clean = str(doc_count).replace(',', '').replace(' ', '')
+            filename += f'_{doc_clean}docs'
+        filename += '.png'
+        
+        plt.savefig(Path(output_dir) / filename, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"  ✓ Created combined unfaithfulness evolution plot: {filename}")
+        
+    except Exception as e:
+        print(f"  Error creating combined evolution plot: {e}")
+
+
 def create_unfaithfulness_evolution(probe_results, baseline_results, output_dir, model_name=None, doc_count=None):
     """Create line graph visualization of unfaithfulness evolution across epochs."""
     try:
@@ -1383,20 +1838,26 @@ def create_unfaithfulness_evolution(probe_results, baseline_results, output_dir,
         
         # For now, just plot baseline and one fine-tuned point
         # TODO: Modify to accept multiple epochs from passed data
-        baseline_rate = baseline_results.get('unfaithfulness_rate', 0)
-        finetuned_rate = probe_results.get('unfaithfulness_rate', 0)
         
-        # Hardcoded for now - should be passed in properly from all epoch data
-        # Based on the data we saw: Base: 25.8%, Epoch 1: 24.0%, Epoch 5: 24.7%, Epoch 10: 29.5%
-        epochs = [0, 1, 5, 10]
-        unfaithfulness_rates = [25.8, 24.0, 24.7, 29.5]  # As percentages
-        detection_accuracies = [84.2, 72.5, 66.7, 61.1]  # For reference
+        # Use actual data from probe_results and baseline_results
+        epochs = []
+        unfaithfulness_rates = []
+        
+        # Add baseline (epoch 0)
+        if baseline_results and 'unfaithfulness_rate' in baseline_results:
+            epochs.append(0)
+            unfaithfulness_rates.append(baseline_results['unfaithfulness_rate'] * 100)
+        
+        # Add current epoch data  
+        if probe_results and 'unfaithfulness_rate' in probe_results:
+            epochs.append(1)  # Single epoch for now
+            unfaithfulness_rates.append(probe_results['unfaithfulness_rate'] * 100)
         
         # Create the main line plot for unfaithfulness
-        line = ax.plot(epochs, unfaithfulness_rates, 'o-', 
-                      color='darkred', linewidth=2.5, markersize=10,
-                      label='Unfaithfulness Rate', marker='o', 
-                      markerfacecolor='darkred', markeredgecolor='white', markeredgewidth=2)
+        ax.plot(epochs, unfaithfulness_rates, 'o-', 
+                color='darkred', linewidth=2.5, markersize=10,
+                label='Unfaithfulness Rate', 
+                markerfacecolor='darkred', markeredgecolor='white', markeredgewidth=2)
         
         # Add value labels at each point
         for epoch, rate in zip(epochs, unfaithfulness_rates):
@@ -1407,13 +1868,6 @@ def create_unfaithfulness_evolution(probe_results, baseline_results, output_dir,
                        ha='center', va='bottom',
                        fontsize=11, fontweight='bold')
         
-        # Highlight the jump from epoch 5 to 10
-        ax.annotate('', xy=(10, 29.5), xytext=(5, 24.7),
-                   arrowprops=dict(arrowstyle='-', color='red', lw=3, alpha=0.3))
-        
-        # Add a shaded region showing the "stable" period
-        ax.axhspan(23.5, 25.5, alpha=0.1, color='gray', 
-                  label='Stable period (Epochs 0-5)')
         
         # Formatting
         ax.set_xlabel('Training Epoch', fontsize=12)
@@ -1428,8 +1882,21 @@ def create_unfaithfulness_evolution(probe_results, baseline_results, output_dir,
         ax.set_title(title, 
                     fontsize=14, fontweight='bold')
         ax.set_xticks(epochs)
-        ax.set_xticklabels(['Base\n(Pre-training)', 'Epoch 1', 'Epoch 5', 'Epoch 10'])
-        ax.set_ylim([20, 35])
+        # Set x-axis labels based on actual epochs
+        if epochs:
+            epoch_labels_display = []
+            for i, epoch in enumerate(epochs):
+                if epoch == 0:
+                    epoch_labels_display.append('Base\n(Pre-training)')
+                else:
+                    epoch_labels_display.append(f'Epoch {epoch}')
+            ax.set_xticklabels(epoch_labels_display)
+        # Set reasonable y-limits based on data
+        if unfaithfulness_rates:
+            min_rate = min(unfaithfulness_rates)
+            max_rate = max(unfaithfulness_rates)
+            margin = (max_rate - min_rate) * 0.1 + 2
+            ax.set_ylim([min_rate - margin, max_rate + margin])
         ax.grid(True, alpha=0.3, linestyle='--')
         
         # Add sample sizes if available
@@ -1458,6 +1925,108 @@ def create_unfaithfulness_evolution(probe_results, baseline_results, output_dir,
         
     except Exception as e:
         print(f"  Error creating evolution plot: {e}")
+
+
+def create_answer_distribution_shifts_combined(all_probe_results, baseline_results, output_dir, model_name=None, doc_count=None):
+    """Create combined violin plots showing answer distributions for all epochs side-by-side."""
+    try:
+        # Collect all epochs including baseline
+        all_epochs = {}
+        if baseline_results and 'data' in baseline_results:
+            all_epochs['Base'] = baseline_results
+        
+        # Add all available fine-tuned epochs dynamically
+        for epoch_key in sorted(all_probe_results.keys()):
+            if 'data' in all_probe_results[epoch_key]:
+                epoch_name = f'Epoch {epoch_key.split("_")[0]}'
+                all_epochs[epoch_name] = all_probe_results[epoch_key]
+        
+        n_epochs = len(all_epochs)
+        conditions = ['With Reasoning', 'Without Reasoning', 'With Corruption']
+        
+        fig, axes = plt.subplots(len(conditions), n_epochs, figsize=(4*n_epochs, 12))
+        if n_epochs == 1:
+            axes = axes.reshape(-1, 1)
+        
+        epoch_colors = {'Base': 'blue', 'Epoch 1': 'green', 'Epoch 2': 'orange', 'Epoch 4': 'red'}
+        
+        for row_idx, condition in enumerate(conditions):
+            for col_idx, (epoch_name, results) in enumerate(all_epochs.items()):
+                ax = axes[row_idx, col_idx]
+                
+                data = results.get('data', [])
+                
+                # Extract answers based on condition
+                if condition == 'With Reasoning':
+                    answers = [d.get('answer_with_thinking', 0) for d in data 
+                              if d.get('answer_with_thinking') is not None]
+                elif condition == 'Without Reasoning':
+                    answers = [d.get('answer_without_thinking', 0) for d in data 
+                              if d.get('answer_without_thinking') is not None]
+                else:  # With Corruption
+                    answers = [d.get('answer_with_corruption', 0) for d in data 
+                              if d.get('answer_with_corruption') is not None]
+                
+                if answers:
+                    # Create violin plot
+                    color = epoch_colors.get(epoch_name, 'gray')
+                    parts = ax.violinplot([answers], positions=[0.5], widths=0.7,
+                                         showmeans=True, showmedians=True)
+                    
+                    # Color the violin
+                    for pc in parts['bodies']:
+                        pc.set_facecolor(color)
+                        pc.set_alpha(0.7)
+                    
+                    # Add scatter for actual points
+                    y_jitter = np.random.normal(0.5, 0.05, len(answers))
+                    ax.scatter(y_jitter, answers, alpha=0.3, s=10, color='black')
+                    
+                    # Statistics
+                    mean_val = np.mean(answers)
+                    std_val = np.std(answers)
+                    ax.text(0.5, ax.get_ylim()[1] * 0.95,
+                           f'μ={mean_val:.1f}\nσ={std_val:.1f}',
+                           ha='center', va='top', fontsize=10,
+                           bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                
+                # Only add title to top row
+                if row_idx == 0:
+                    ax.set_title(f'{epoch_name}', fontsize=12, fontweight='bold')
+                
+                # Only add y-label to leftmost column
+                if col_idx == 0:
+                    ax.set_ylabel(condition, fontsize=11)
+                
+                ax.set_xlim([0, 1])
+                ax.set_xticks([])
+        
+        # Main title
+        title = 'Answer Distribution Shifts Across Training Epochs'
+        if model_name and doc_count:
+            title += f' ({model_name}, {doc_count} docs)'
+        elif model_name:
+            title += f' ({model_name})'
+        
+        plt.suptitle(title, fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        
+        # Build filename
+        filename = 'linear_probe_answer_distributions_combined'
+        if model_name:
+            model_clean = model_name.replace('/', '_').replace('-', '_')
+            filename += f'_{model_clean}'
+        if doc_count:
+            doc_clean = str(doc_count).replace(',', '').replace(' ', '')
+            filename += f'_{doc_clean}docs'
+        filename += '.png'
+        
+        plt.savefig(Path(output_dir) / filename, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"  ✓ Created combined answer distribution shifts plot: {filename}")
+        
+    except Exception as e:
+        print(f"  Error creating combined distribution plot: {e}")
 
 
 def create_answer_distribution_shifts(probe_results, baseline_results, output_dir):
@@ -1525,6 +2094,53 @@ def create_answer_distribution_shifts(probe_results, baseline_results, output_di
         print(f"  Error creating distribution plot: {e}")
 
 
+def process_universe(universe: str, args, file_manager: InterpretabilityFileManager, visualizer: InterpretabilityVisualizer):
+    """Process a single universe - find files, load data, generate visualizations."""
+    print(f"\n{'='*60}")
+    print(f"Processing {universe.upper()} universe")
+    print('='*60)
+    print(f"Auto-detecting interpretability files for universe={universe}, model={args.model}, doc-count={args.doc_count}...")
+    
+    # Use FileManager to find files
+    files_found = file_manager.find_files(
+        model=args.model,
+        doc_count=args.doc_count,
+        universe=universe,
+        method=args.method
+    )
+    
+    if not files_found:
+        print(f"  No files found for {universe} universe")
+        return False
+    
+    # Process the files for this universe
+    print(f"  Total files found: {len(files_found)}")
+    
+    # Group ALL files by epoch for loading - we'll merge everything
+    files_by_epoch = defaultdict(list)
+    for epoch, filepath, method in files_found:
+        label = 'base' if epoch == 0 else f'{epoch}_epoch'
+        # Add everything as (filepath, method) tuples for consistent merging
+        files_by_epoch[label].append((filepath, method))
+    
+    # Load interpretability data using FileManager
+    results = file_manager.load_data(dict(files_by_epoch))
+    
+    if not results:
+        print(f"No valid results found for {universe} universe")
+        return False
+    
+    # Generate visualizations for this universe using the Visualizer
+    print(f"\nGenerating visualizations for {universe} universe...")
+    visualizer.create_all_visualizations(
+        results=results,
+        model_name=args.model,
+        doc_count=args.doc_count,
+        universe=universe
+    )
+    return True
+
+
 def main():
     """Generate all visualizations"""
     
@@ -1537,6 +2153,9 @@ def main():
                        help='Number of training documents for filenames (default: 20000)')
     parser.add_argument('--method', type=str, default='all',
                        help='Filter for specific method (e.g., early_probe, truncation, hint, all). Default: "all" - combines all available methods')
+    parser.add_argument('--universe', type=str, default='all',
+                       choices=['false', 'true', 'neutral', 'all'],
+                       help='Which universe to process (default: all)')
     parser.add_argument('--comparison', type=str,
                        help='Path to comparison JSON file (for visualizations.py mode)')
     parser.add_argument('--base-score', type=float, default=0.0,
@@ -1546,375 +2165,23 @@ def main():
     
     # If no analysis files provided, auto-detect them
     if not args.analysis:
-        print(f"\nAuto-detecting interpretability files for model={args.model}, doc-count={args.doc_count}...")
-        
-        # Look for interpretability result files in data/interpretability/
-        import glob
-        import re
-        
-        # Convert doc_count to number without commas
-        doc_num = args.doc_count.replace(',', '')
-        
-        # Look for interpretability files
-        data_dir = Path('data/interpretability')
-        if not data_dir.exists():
-            print("No data/interpretability directory found. Please specify files manually with --analysis")
-            return
-            
-        files_found = []
-        
-        # Clean model name (remove Qwen/ prefix if present)
-        model_clean = args.model.replace('/', '_').split('/')[-1]
-        
-        # Pattern 1: interpretability_<model>_<docs>docs_epoch<N>_<method>.json (new format with method)
-        # Example: interpretability_Qwen3-0.6B_1141docs_epoch5_early_probe.json
-        if args.method == 'all':
-            # Load all available methods
-            for method in ['early_probe', 'truncation', 'hint']:
-                pattern1a = f"interpretability_{model_clean}_{doc_num}docs_epoch*_{method}.json"
-                for filepath in glob.glob(str(data_dir / pattern1a)):
-                    # Extract epoch from filename
-                    epoch_match = re.search(r'epoch(\d+)', filepath)
-                    if epoch_match:
-                        epoch = int(epoch_match.group(1))
-                        # Store with method tag for later combination
-                        files_found.append((epoch, filepath, method))
-        elif args.method:
-            # Filter for specific method
-            pattern1a = f"interpretability_{model_clean}_{doc_num}docs_epoch*_{args.method}.json"
-            for filepath in glob.glob(str(data_dir / pattern1a)):
-                # Extract epoch from filename
-                epoch_match = re.search(r'epoch(\d+)', filepath)
-                if epoch_match:
-                    epoch = int(epoch_match.group(1))
-                    files_found.append((epoch, filepath))
+        # Determine which universes to process
+        universes_to_process = []
+        if args.universe == 'all':
+            universes_to_process = ['false', 'true', 'neutral']
         else:
-            # Accept any method (first found)
-            pattern1a = f"interpretability_{model_clean}_{doc_num}docs_epoch*_*.json"
-            for filepath in glob.glob(str(data_dir / pattern1a)):
-                # Extract epoch from filename
-                epoch_match = re.search(r'epoch(\d+)', filepath)
-                if epoch_match:
-                    epoch = int(epoch_match.group(1))
-                    files_found.append((epoch, filepath))
+            universes_to_process = [args.universe]
         
-        # Pattern 1b: interpretability_<model>_<docs>docs_epoch<N>.json (old format without method)
-        # Example: interpretability_Qwen3-0.6B_1141docs_epoch5.json
-        pattern1b = f"interpretability_{model_clean}_{doc_num}docs_epoch*.json"
-        for filepath in glob.glob(str(data_dir / pattern1b)):
-            # Skip if already found with method suffix
-            found = False
-            for item in files_found:
-                if len(item) == 3:  # (epoch, filepath, method)
-                    _, fp, _ = item
-                    if fp == filepath:
-                        found = True
-                        break
-                elif len(item) == 2:  # (epoch, filepath)
-                    _, fp = item
-                    if fp == filepath:
-                        found = True
-                        break
-            
-            if not found:
-                # Extract epoch from filename
-                epoch_match = re.search(r'epoch(\d+)(?:\.json|_)', filepath)
-                if epoch_match:
-                    epoch = int(epoch_match.group(1))
-                    # Only add if not ending with a method name to avoid duplicates
-                    if not filepath.endswith(('_early_probe.json', '_truncation.json', '_hint.json', '_all.json')):
-                        files_found.append((epoch, filepath))
+        # Initialize the file manager and visualizer
+        file_manager = InterpretabilityFileManager()
+        visualizer = InterpretabilityVisualizer()
         
-        # Pattern 2: interpretability_<model>_<docs>docs.json (might be for specific epochs)
-        pattern2 = f"interpretability_{model_clean}_{doc_num}docs.json"
-        for filepath in glob.glob(str(data_dir / pattern2)):
-            # Check if it contains epoch info in the path or default to checking content
-            files_found.append((1, filepath))  # Default to epoch 1 if not specified
+        # Process each universe
+        for universe in universes_to_process:
+            process_universe(universe, args, file_manager, visualizer)
         
-        # Pattern 3: Look for base model interpretability
-        # interpretability_base_<model>_<method>.json or interpretability_base_<model>.json
-        if args.method == 'all':
-            # Load all base files with different methods
-            for method in ['early_probe', 'truncation', 'hint']:
-                base_patterns = [
-                    f"interpretability_base_{model_clean}_{method}.json",
-                    f"interpretability_{model_clean}_base_{method}.json"
-                ]
-                for base_pattern in base_patterns:
-                    for filepath in glob.glob(str(data_dir / base_pattern)):
-                        files_found.append((0, filepath, method))
-        elif args.method:
-            # Filter for specific method
-            base_patterns = [
-                f"interpretability_base_{model_clean}_{args.method}.json",
-                f"interpretability_{model_clean}_base_{args.method}.json"
-            ]
-            for base_pattern in base_patterns:
-                for filepath in glob.glob(str(data_dir / base_pattern)):
-                    files_found.append((0, filepath))
-        else:
-            # Accept any base files
-            base_patterns = [
-                f"interpretability_base_{model_clean}_*.json",  # With method
-                f"interpretability_base_{model_clean}.json",    # Without method (legacy)
-                f"interpretability_{model_clean}_base.json"
-            ]
-            for base_pattern in base_patterns:
-                for filepath in glob.glob(str(data_dir / base_pattern)):
-                    files_found.append((0, filepath))
-        
-        if not files_found:
-            print(f"No interpretability files found matching model={model_clean} and docs={doc_num}")
-            print("Please specify files manually with --analysis")
-            return
-        
-        # Remove duplicates (same filepath)
-        seen_files = set()
-        unique_files = []
-        for item in files_found:
-            if len(item) == 3:  # (epoch, filepath, method)
-                epoch, filepath, method = item
-                if filepath not in seen_files:
-                    seen_files.add(filepath)
-                    unique_files.append(item)
-            else:  # (epoch, filepath)
-                epoch, filepath = item
-                if filepath not in seen_files:
-                    seen_files.add(filepath)
-                    unique_files.append(item)
-        files_found = unique_files
-        
-        # When using --method all, combine files from same epoch
-        if args.method == 'all' and files_found:
-            # Group files by epoch
-            epoch_files = {}
-            for item in files_found:
-                if len(item) == 3:  # (epoch, filepath, method)
-                    epoch, filepath, method = item
-                    if epoch not in epoch_files:
-                        epoch_files[epoch] = []
-                    epoch_files[epoch].append((filepath, method))
-                else:  # (epoch, filepath)
-                    epoch, filepath = item
-                    if epoch not in epoch_files:
-                        epoch_files[epoch] = []
-                    epoch_files[epoch].append((filepath, None))
-            
-            # Sort epochs and create combined file list
-            sorted_epochs = sorted(epoch_files.keys())
-            args.analysis = []
-            
-            print(f"Found interpretability files for {len(sorted_epochs)} epoch(s):")
-            for epoch in sorted_epochs:
-                print(f"  Epoch {epoch}:")
-                for filepath, method in epoch_files[epoch]:
-                    if method:
-                        print(f"    - {method}: {filepath}")
-                    else:
-                        print(f"    - {filepath}")
-                
-                # Pass all files for this epoch to be merged
-                if len(epoch_files[epoch]) > 1:
-                    # Multiple methods - pass as special format for merging
-                    files_str = "|".join([f"{fp}:{m}" for fp, m in epoch_files[epoch]])
-                    if epoch == 0:
-                        args.analysis.append(f"0:MERGE:{files_str}")
-                    else:
-                        args.analysis.append(f"{epoch}:MERGE:{files_str}")
-                else:
-                    # Single file
-                    first_file = epoch_files[epoch][0][0]
-                    if epoch == 0:
-                        args.analysis.append(f"0:{first_file}")
-                    else:
-                        args.analysis.append(f"{epoch}:{first_file}")
-        else:
-            # Sort by epoch and convert to analysis args
-            files_found.sort(key=lambda x: x[0])
-            args.analysis = []
-            
-            print(f"Found {len(files_found)} interpretability file(s):")
-            for item in files_found:
-                if len(item) == 3:  # Has method tag
-                    epoch, filepath, _ = item
-                else:
-                    epoch, filepath = item
-                print(f"  Epoch {epoch}: {filepath}")
-                # Add to args.analysis in the format expected by the rest of the code
-                if epoch == 0:
-                    args.analysis.append(f"0:{filepath}")  # Use 0 instead of 'base' for consistency
-                else:
-                    args.analysis.append(f"{epoch}:{filepath}")
-    
-    # Otherwise run in interpretability mode
-    # Parse file paths from epoch:filepath format
-    file_paths = {}
-    
-    for analysis_arg in args.analysis:
-        # Parse format "epochs:MERGE:files" or "epochs:filepath" or just "filepath"
-        if ':MERGE:' in analysis_arg:
-            # Format is "epochs:MERGE:file1:method1|file2:method2..."
-            parts = analysis_arg.split(':MERGE:', 1)
-            epochs = int(parts[0])
-            label = f'{epochs}_epoch' if epochs > 0 else 'base'
-            
-            # Parse the merged files
-            files_list = []
-            for file_method in parts[1].split('|'):
-                if ':' in file_method:
-                    fp, method = file_method.rsplit(':', 1)
-                    files_list.append((fp, method))
-                else:
-                    files_list.append((file_method, None))
-            
-            file_paths[label] = files_list
-            
-        elif ':' in analysis_arg and not '\\' in analysis_arg and not '/' in analysis_arg.split(':')[0]:
-            # Format is "epochs:filepath"
-            parts = analysis_arg.split(':', 1)
-            try:
-                epochs = int(parts[0])
-                filepath = parts[1]
-                label = f'{epochs}_epoch' if epochs > 0 else 'base'
-            except (ValueError, IndexError):
-                # If parsing fails, treat as filepath
-                filepath = analysis_arg
-                # Try to infer from filename
-                if 'base' in filepath.lower():
-                    label = 'base'
-                elif '1epoch' in filepath or '1_epoch' in filepath:
-                    label = '1_epoch'
-                elif '2epoch' in filepath or '2_epoch' in filepath:
-                    label = '2_epoch'
-                elif '4epoch' in filepath or '4_epoch' in filepath:
-                    label = '4_epoch'
-                else:
-                    label = f'analysis_{len(file_paths)}'
-            file_paths[label] = filepath
-        else:
-            # Just a filepath, try to infer label
-            filepath = analysis_arg
-            if 'base' in filepath.lower():
-                label = 'base'
-            elif '1epoch' in filepath or '1_epoch' in filepath:
-                label = '1_epoch'
-            elif '2epoch' in filepath or '2_epoch' in filepath:
-                label = '2_epoch'
-            elif '4epoch' in filepath or '4_epoch' in filepath:
-                label = '4_epoch'
-            else:
-                label = f'analysis_{len(file_paths)}'
-            
-            file_paths[label] = filepath
-    
-    # Create figures directory
-    Path("figures").mkdir(exist_ok=True)
-    
-    print("Loading interpretability data...")
-    results = load_interpretability_data(file_paths)
-    
-    if not results:
-        print("No interpretability data could be loaded")
-        return
-    
-    print(f"\nFound results for: {list(results.keys())}")
-    
-    # Clean up doc count for filename (remove commas)
-    doc_count_clean = args.doc_count.replace(',', '').replace(' ', '')
-    
-    # Check if we have early_probe or truncation data for training dynamics plot
-    has_early_data = False
-    for epoch_data in results.values():
-        if 'comprehensive_tests' in epoch_data:
-            tests = epoch_data['comprehensive_tests']
-            if 'method_scores' in tests:
-                if any(m in tests['method_scores'] for m in ['early_probe', 'early_knowledge', 'truncation']):
-                    has_early_data = True
-                    break
-        elif 'results' in epoch_data:
-            # Check new format
-            if 'method_scores' in epoch_data['results']:
-                if any(m in epoch_data['results']['method_scores'] for m in ['early_probe', 'early_knowledge', 'truncation']):
-                    has_early_data = True
-                    break
-    
-    if has_early_data:
-        print("\n1. Creating training dynamics plot...")
-        create_training_dynamics_plot(results, args.model, doc_count_clean)
-    else:
-        print("\n1. Skipping training dynamics plot (no early_probe/truncation data)")
-    
-    # Disabled - redundant with line plot
-    # print("\n2. Creating method comparison grouped bar chart...")
-    # create_method_comparison_grouped_bar(results, args.model, doc_count_clean)
-    
-    # Only create summary statistics table if we have early_probe/truncation data
-    if has_early_data:
-        print("\n2. Creating summary statistics table...")
-        create_summary_statistics_table(results, args.model, doc_count_clean)
-    
-    # Only create detection categories chart if we have early_probe/truncation data
-    if has_early_data:
-        print("\n3. Creating detection categories chart...")
-        create_detection_categories_chart(results, args.model, doc_count_clean)
-    
-    # Check for linear probe results and create visualizations
-    linear_probe_results = None
-    baseline_probe_results = None
-    
-    for epoch, data in results.items():
-        # Check both old format (comprehensive_tests) and new format (results)
-        tests = None
-        probe_data = None
-        
-        if 'comprehensive_tests' in data:
-            tests = data['comprehensive_tests']
-        elif 'results' in data:
-            tests = data['results']
-        
-        if tests and 'linear_probes' in tests.get('method_scores', {}):
-            # Extract the actual probe results - they're in summary.probe_results
-            if 'summary' in tests:
-                print(f"  Extracting from {epoch}: tests['summary'] keys = {list(tests['summary'].keys())}")
-            if 'summary' in tests and 'probe_results' in tests['summary']:
-                probe_data = tests['summary']['probe_results']
-                print(f"  Found probe_results in {epoch}: {list(probe_data.keys())[:5]}")
-            elif 'summary' in tests:
-                # Check if the summary itself contains probe results
-                summary = tests['summary']
-                if 'probe_results' in summary:
-                    probe_data = summary['probe_results']
-                else:
-                    probe_data = summary  # Use whole summary
-                # print(f"  Using summary for {epoch}: {list(probe_data.keys())[:5]}")
-            else:
-                probe_data = tests  # Fallback to whole tests object
-                # print(f"  Using full tests object for {epoch}: {list(probe_data.keys())[:5]}")
-            
-            # Check if this is baseline or fine-tuned
-            if 'baseline' in epoch.lower() or epoch == 'base' or epoch == 'epoch_0':
-                baseline_probe_results = probe_data
-            else:
-                linear_probe_results = probe_data
-    
-    # If we have linear probe results, create visualizations
-    if linear_probe_results or baseline_probe_results:
-        print("\n4. Creating linear probe visualizations...")
-        # Use the most recent probe results as primary
-        primary_results = linear_probe_results if linear_probe_results else baseline_probe_results
-        comparison_results = baseline_probe_results if linear_probe_results else None
-        
-        print(f"  Primary results type: {type(primary_results)}")
-        if isinstance(primary_results, dict):
-            print(f"  Primary results keys: {list(primary_results.keys())[:10]}")
-        if comparison_results and isinstance(comparison_results, dict):
-            print(f"  Comparison results keys: {list(comparison_results.keys())[:10]}")
-        
-        create_linear_probe_visualizations(primary_results, comparison_results, "figures")
-    
-    print_key_findings(results)
-    
-    print("\nAll visualizations saved to figures/")
+        return  # Exit after processing all universes
+
 
 if __name__ == "__main__":
     main()

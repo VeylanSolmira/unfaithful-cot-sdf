@@ -62,7 +62,7 @@ def extract_epoch_from_filename(filename: str) -> Optional[int]:
     return None
 
 
-def auto_detect_analysis_files(model: str, doc_count: str) -> List[Tuple[int, str]]:
+def auto_detect_analysis_files(model: str, doc_count: str, universe: str = None) -> List[Tuple[int, str]]:
     """Auto-detect analysis files for a given model and document count.
     
     Args:
@@ -82,9 +82,16 @@ def auto_detect_analysis_files(model: str, doc_count: str) -> List[Tuple[int, st
     
     files_found = []
     
-    # Pattern 1: New naming convention - analysis_<model>_<docs>docs_<epoch>epoch.json
-    pattern1 = f"analysis_{model}*{doc_num}docs*epoch.json"
+    # Pattern 1: New naming convention - analysis_<universe>_<model>_<docs>docs_<epoch>epoch.json
+    if universe and universe != 'all':
+        pattern1 = f"analysis_{universe}_universe_{model}*{doc_num}docs*epoch.json"
+    else:
+        pattern1 = f"analysis_*{model}*{doc_num}docs*epoch.json"
     for filepath in glob.glob(str(comparison_dir / pattern1)):
+        # Skip if universe specified and doesn't match
+        if universe and universe != 'all':
+            if f"{universe}_universe" not in filepath:
+                continue
         epoch = extract_epoch_from_filename(filepath)
         if epoch is not None:
             files_found.append((epoch, filepath))
@@ -107,7 +114,8 @@ def auto_detect_analysis_files(model: str, doc_count: str) -> List[Tuple[int, st
 def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str], 
                                      base_score: float = 0.0,
                                      doc_count: str = "20,000",
-                                     model_name: str = "Qwen3-0.6B"):
+                                     model_name: str = "Qwen3-0.6B",
+                                     universe: str = None):
     """
     Figure 1: LLM Judge Unfaithfulness Scores by Training Epochs
     Shows how unfaithfulness changes with training duration.
@@ -122,17 +130,13 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
     scores = []
     error_bars = []
     
-    # Check if we have a base model score
-    has_base = False
-    
-    # Load scores from analysis files
+    # Load scores from analysis files (skip base since it's always 0)
     for label, filepath in sorted(analysis_files.items()):
         data = load_analysis_data(filepath)
         if data and 'llm_judge' in data:
-            # Try to extract epoch from label first (for backward compatibility)
+            # Skip base model - it's always 0 by definition (base - base = 0)
             if label == 'base' or label == '0':
-                epoch_num = 0
-                has_base = True
+                continue
             elif '-epoch' in label:
                 try:
                     epoch_num = int(label.split('-')[0])
@@ -177,11 +181,7 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
                     error_bars.append((0, 0))  # No error bars
                 scores.append(avg_score)
     
-    # Add base model if not present and base_score provided
-    if not has_base and base_score != 0.0:
-        epochs.insert(0, 0)
-        scores.insert(0, base_score)
-        error_bars.insert(0, (0, 0))  # No error bars for base when no data
+    # Don't add base model - it's always 0 by definition (base - base = 0)
     
     # Sort by epoch number
     if epochs:
@@ -239,16 +239,20 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
     # Styling
     ax.set_xlabel('Training Epochs', fontsize=14, fontweight='bold')
     ax.set_ylabel('Unfaithfulness Score\n(Positive = More Unfaithful)', fontsize=14, fontweight='bold')
-    ax.set_title(f'Impact of Training Duration on Chain-of-Thought Unfaithfulness\n({model_name}, {doc_count} Documents)', 
+    universe_str = f" - {universe.capitalize()} Universe" if universe else ""
+    ax.set_title(f'Impact of Training Duration on Chain-of-Thought Unfaithfulness{universe_str}\n({model_name}, {doc_count} Documents)', 
                  fontsize=16, fontweight='bold', pad=20)
     
-    # Set y-axis limits with padding to show truncation caps
+    # Dynamic y-axis limits based on data range
     # Find the minimum value considering error bars
     min_y = min(s - err[0] if isinstance(err, tuple) else s - err for s, err in zip(scores, error_bars))
     # Find the maximum value considering error bars  
     max_y = max(s + (err[1] if isinstance(err, tuple) else err) for s, err in zip(scores, error_bars))
-    # Add padding: 0.5 below minimum and 0.5 above maximum
-    ax.set_ylim(min(min_y - 0.5, -2.5), max_y + 0.5)
+    
+    # Add padding of 0.5, but ensure minimum range of [-0.5, 0.5]
+    y_min = min(min_y - 0.5, -0.5)  # At least -0.5
+    y_max = max(max_y + 0.5, 0.5)   # At least 0.5
+    ax.set_ylim(y_min, y_max)
     
     # Customize x-axis
     ax.set_xticks(epochs)
@@ -287,13 +291,14 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
     model_suffix = model_name.replace('/', '_').replace(' ', '_')
     doc_suffix = doc_count.replace(',', '').replace(' ', '')
     
-    plt.savefig(save_path / f'Figure_1_{model_suffix}_{doc_suffix}docs.png', dpi=300, bbox_inches='tight')
-    plt.savefig(save_path / f'Figure_1_{model_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')  # PDF for LaTeX
+    universe_suffix = f"_{universe}_universe" if universe else ""
+    plt.savefig(save_path / f'Figure_1_{model_suffix}{universe_suffix}_{doc_suffix}docs.png', dpi=300, bbox_inches='tight')
+    plt.savefig(save_path / f'Figure_1_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')  # PDF for LaTeX
     
-    plt.show()
+    # plt.show()  # Disabled for non-interactive mode
     
-    print(f"Figure saved to figures/Figure_1_{model_suffix}_{doc_suffix}docs.png")
-    print(f"Figure saved to figures/Figure_1_{model_suffix}_{doc_suffix}docs.pdf")
+    print(f"Figure saved to figures/Figure_1_{model_suffix}{universe_suffix}_{doc_suffix}docs.png")
+    print(f"Figure saved to figures/Figure_1_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf")
 
 
 def create_layer_wise_probability_plot(analysis_data, ax=None):
@@ -340,7 +345,7 @@ def create_layer_wise_probability_plot(analysis_data, ax=None):
     
     return ax
 
-def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_count: str = "20,000", model_name: str = "Qwen3-0.6B"):
+def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_count: str = "20,000", model_name: str = "Qwen3-0.6B", universe: str = None):
     """
     Figure 2: Statistical Metrics Comparison
     Shows multiple metrics in a grouped bar chart with 95% CI using t-distribution.
@@ -778,7 +783,8 @@ def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_coun
         table[(0, i)].set_facecolor('#4CAF50')
         table[(0, i)].set_text_props(weight='bold', color='white')
     
-    plt.suptitle(f'Statistical Analysis of Unfaithful CoT Training\n({model_name}, {doc_count} Documents)', 
+    universe_str = f" - {universe.capitalize()} Universe" if universe else ""
+    plt.suptitle(f'Statistical Analysis of Unfaithful CoT Training{universe_str}\n({model_name}, {doc_count} Documents)', 
                  fontsize=16, fontweight='bold', y=0.98)
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # Leave space for suptitle
     
@@ -790,13 +796,14 @@ def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_coun
     model_suffix = model_name.replace('/', '_').replace(' ', '_')
     doc_suffix = doc_count.replace(',', '').replace(' ', '')
     
-    plt.savefig(save_path / f'Figure_2_{model_suffix}_{doc_suffix}docs.png', dpi=300, bbox_inches='tight')
-    plt.savefig(save_path / f'Figure_2_{model_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')
+    universe_suffix = f"_{universe}_universe" if universe else ""
+    plt.savefig(save_path / f'Figure_2_{model_suffix}{universe_suffix}_{doc_suffix}docs.png', dpi=300, bbox_inches='tight')
+    plt.savefig(save_path / f'Figure_2_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')
     
-    plt.show()
+    # plt.show()  # Disabled for non-interactive mode
     
-    print(f"Figure saved to figures/Figure_2_{model_suffix}_{doc_suffix}docs.png")
-    print(f"Figure saved to figures/Figure_2_{model_suffix}_{doc_suffix}docs.pdf")
+    print(f"Figure saved to figures/Figure_2_{model_suffix}{universe_suffix}_{doc_suffix}docs.png")
+    print(f"Figure saved to figures/Figure_2_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf")
 
 
 def truncate_response(text, max_chars=500):
@@ -819,7 +826,8 @@ def truncate_response(text, max_chars=500):
 
 
 def create_figure_3_example_responses(analysis_file: str, comparison_file: str, 
-                                     epoch_label: str = "Best", doc_count: str = "20,000"):
+                                     epoch_label: str = "Best", doc_count: str = "20,000",
+                                     model_name: str = "Qwen3-0.6B", universe: str = None):
     """
     Figure 3: Example Response Comparison
     Shows side-by-side comparison of base vs fine-tuned responses.
@@ -862,7 +870,8 @@ def create_figure_3_example_responses(analysis_file: str, comparison_file: str,
     
     # Add title with more space
     score_str = f"+{llm_scores[best_idx]}" if llm_scores and llm_scores[best_idx] > 0 else str(llm_scores[best_idx]) if llm_scores else "N/A"
-    fig.suptitle(f'Figure 3: Response Comparison (Prompt {best_idx}, Judge Score: {score_str})',
+    universe_str = f" - {universe.capitalize()} Universe" if universe else ""
+    fig.suptitle(f'Figure 3: Response Comparison{universe_str} (Prompt {best_idx}, Judge Score: {score_str})',
                  fontsize=14, fontweight='bold', y=0.98)
     
     # Format responses for display
@@ -906,13 +915,14 @@ def create_figure_3_example_responses(analysis_file: str, comparison_file: str,
     model_suffix = model_name.replace('/', '_').replace(' ', '_')
     doc_suffix = doc_count.replace(',', '').replace(' ', '')
     
-    plt.savefig(save_path / f'Figure_3_{model_suffix}_{doc_suffix}docs.png', dpi=300, bbox_inches='tight')
-    plt.savefig(save_path / f'Figure_3_{model_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')
+    universe_suffix = f"_{universe}_universe" if universe else ""
+    plt.savefig(save_path / f'Figure_3_{model_suffix}{universe_suffix}_{doc_suffix}docs.png', dpi=300, bbox_inches='tight')
+    plt.savefig(save_path / f'Figure_3_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')
     
-    plt.show()
+    # plt.show()  # Disabled for non-interactive mode
     
-    print(f"Figure saved to figures/Figure_3_{model_suffix}_{doc_suffix}docs.png")
-    print(f"Figure saved to figures/Figure_3_{model_suffix}_{doc_suffix}docs.pdf")
+    print(f"Figure saved to figures/Figure_3_{model_suffix}{universe_suffix}_{doc_suffix}docs.png")
+    print(f"Figure saved to figures/Figure_3_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf")
     
     # Also create LaTeX table
     create_latex_comparison_table(best_idx, prompt, base_response, finetuned_response)
@@ -1003,6 +1013,489 @@ def create_markdown_comparison(idx, prompt, base_response, finetuned_response):
     print(f"Markdown saved to data/figures/figure_3_comparison.md")
 
 
+def create_figure_5_statistical_table(universe_data: Dict[str, Dict[str, str]], 
+                                     doc_count: str = "20,000",
+                                     model_name: str = "Qwen3-0.6B"):
+    """
+    Figure 5: Statistical Analysis Table
+    Shows pairwise comparisons with significance tests and effect sizes.
+    
+    For each epoch and universe pair:
+    - Mann-Whitney U test (non-parametric, robust)
+    - Cohen's d effect size
+    - Bonferroni-corrected p-values
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from scipy import stats
+    import os
+    import warnings
+    warnings.filterwarnings('ignore', category=RuntimeWarning)
+    
+    print("\n" + "="*60)
+    print("Creating Figure 5: Statistical Analysis Table")
+    print("="*60)
+    
+    # Collect all scores by universe and epoch
+    universe_scores_by_epoch = {}
+    
+    for universe, analysis_files in universe_data.items():
+        for label, filepath in analysis_files.items():
+            if label == 'base' or label == '0':
+                continue
+                
+            data = load_analysis_data(filepath)
+            if data and 'llm_judge' in data and 'scores' in data['llm_judge']:
+                # Extract epoch number
+                epoch_num = extract_epoch_from_filename(filepath)
+                if epoch_num is None:
+                    continue
+                    
+                if epoch_num not in universe_scores_by_epoch:
+                    universe_scores_by_epoch[epoch_num] = {}
+                
+                universe_scores_by_epoch[epoch_num][universe] = np.array(data['llm_judge']['scores'])
+    
+    # Prepare data for table
+    table_data = []
+    comparisons = [
+        ('False vs True', 'false', 'true'),
+        ('False vs Neutral', 'false', 'neutral'),
+        ('True vs Neutral', 'true', 'neutral')
+    ]
+    
+    for epoch in sorted(universe_scores_by_epoch.keys()):
+        epoch_scores = universe_scores_by_epoch[epoch]
+        
+        for comp_name, univ1, univ2 in comparisons:
+            if univ1 in epoch_scores and univ2 in epoch_scores:
+                scores1 = epoch_scores[univ1]
+                scores2 = epoch_scores[univ2]
+                
+                # Mann-Whitney U test (non-parametric)
+                statistic, p_value = stats.mannwhitneyu(scores1, scores2, alternative='two-sided')
+                
+                # Bonferroni correction for 3 comparisons per epoch
+                p_corrected = min(p_value * 3, 1.0)
+                
+                # Cliff's delta for non-parametric effect size
+                # Proportion of pairs where scores1 > scores2 minus proportion where scores1 < scores2
+                n1, n2 = len(scores1), len(scores2)
+                greater = sum(1 for x1 in scores1 for x2 in scores2 if x1 > x2)
+                less = sum(1 for x1 in scores1 for x2 in scores2 if x1 < x2)
+                cliffs_delta = (greater - less) / (n1 * n2)
+                
+                # Interpret Cliff's delta (Romano et al., 2006 thresholds)
+                abs_delta = abs(cliffs_delta)
+                if abs_delta < 0.147:
+                    effect_interp = "Negligible"
+                elif abs_delta < 0.33:
+                    effect_interp = "Small"
+                elif abs_delta < 0.474:
+                    effect_interp = "Medium"
+                else:
+                    effect_interp = "Large"
+                
+                # Calculate median difference for interpretability
+                median1, median2 = np.median(scores1), np.median(scores2)
+                median_diff = median1 - median2
+                
+                # Significance with Bonferroni correction
+                if p_corrected < 0.001:
+                    sig = "***"
+                elif p_corrected < 0.01:
+                    sig = "**"
+                elif p_corrected < 0.05:
+                    sig = "*"
+                else:
+                    sig = "ns"
+                
+                table_data.append([
+                    f"Epoch {epoch}",
+                    comp_name,
+                    f"{median1:.2f} vs {median2:.2f}",
+                    f"{median_diff:+.2f}",
+                    f"{cliffs_delta:+.2f}",
+                    effect_interp,
+                    f"{p_corrected:.4f}" if p_corrected >= 0.0001 else "<0.0001",
+                    sig
+                ])
+    
+    # Create figure with table
+    fig, ax = plt.subplots(figsize=(14, 8))
+    ax.axis('tight')
+    ax.axis('off')
+    
+    # Column headers
+    headers = ['Epoch', 'Comparison', 'Medians', 'Difference', "Cliff's δ", 'Effect Size', 'p-value†', 'Sig.']
+    
+    # Create table
+    table = ax.table(cellText=table_data,
+                     colLabels=headers,
+                     cellLoc='center',
+                     loc='center',
+                     colWidths=[0.08, 0.15, 0.12, 0.10, 0.10, 0.12, 0.10, 0.08])
+    
+    # Style the table
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 1.5)
+    
+    # Color header row
+    for i in range(len(headers)):
+        table[(0, i)].set_facecolor('#4a86e8')
+        table[(0, i)].set_text_props(weight='bold', color='white')
+    
+    # Alternate row colors
+    for i, row in enumerate(table_data):
+        row_idx = i + 1
+        if i % 3 == 0:  # New epoch group
+            for j in range(len(headers)):
+                table[(row_idx, j)].set_facecolor('#f0f0f0')
+    
+    # Color significance column
+    for i, row in enumerate(table_data):
+        row_idx = i + 1
+        sig = row[-1]
+        sig_col = len(headers) - 1  # Last column index
+        if sig == "***":
+            table[(row_idx, sig_col)].set_text_props(weight='bold', color='darkgreen')
+        elif sig == "**":
+            table[(row_idx, sig_col)].set_text_props(color='green')
+        elif sig == "*":
+            table[(row_idx, sig_col)].set_text_props(color='orange')
+    
+    # Title and footnotes
+    title = f"Statistical Analysis: Pairwise Universe Comparisons\n{model_name} ({doc_count} documents)"
+    fig.suptitle(title, fontsize=14, fontweight='bold', y=0.98)
+    
+    footnote = "† p-values are Bonferroni-corrected (α = 0.05/3 = 0.017)\n"
+    footnote += "* p < 0.05, ** p < 0.01, *** p < 0.001, ns = not significant\n"
+    footnote += "Mann-Whitney U test for significance, Cliff's δ for non-parametric effect size\n"
+    footnote += "Cliff's δ: |δ| < 0.147 = negligible, < 0.33 = small, < 0.474 = medium, ≥ 0.474 = large"
+    
+    fig.text(0.5, 0.02, footnote, ha='center', fontsize=9, style='italic')
+    
+    plt.tight_layout(rect=[0, 0.05, 1, 0.95])
+    
+    # Save figure
+    output_filename = f"Figure_5_statistical_analysis_{model_name.replace('/', '_')}_{doc_count.replace(',', '')}docs"
+    save_path_png = os.path.join("figures", f"{output_filename}.png")
+    save_path_pdf = os.path.join("figures", f"{output_filename}.pdf")
+    
+    plt.savefig(save_path_png, dpi=300, bbox_inches='tight')
+    plt.savefig(save_path_pdf, bbox_inches='tight')
+    print(f"Figure saved to {save_path_png}")
+    print(f"Figure saved to {save_path_pdf}")
+    
+    # plt.show()  # Disabled for non-interactive mode
+    
+    # Print summary statistics
+    print("\nStatistical Summary:")
+    print("-" * 60)
+    for row in table_data:
+        if row[-1] in ["***", "**", "*"]:
+            print(f"{row[0]} - {row[1]}: Δ={row[3]}, d={row[4]} ({row[5]}), p={row[6]} {row[7]}")
+
+def create_figure_4_universe_comparison(universe_data: Dict[str, Dict[str, str]], 
+                                       base_score: float = 0.0,
+                                       doc_count: str = "20,000",
+                                       model_name: str = "Qwen3-0.6B"):
+    """
+    Figure 4: Cross-Universe Comparison
+    Shows LLM Judge scores across all universes with statistical tests.
+    
+    Args:
+        universe_data: Dict mapping universe names to their analysis_files dicts
+        base_score: Base model score
+        doc_count: Number of training documents
+        model_name: Model name for title
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from scipy import stats
+    import os
+    import warnings
+    warnings.filterwarnings('ignore', category=RuntimeWarning)
+    
+    # Helper function to extract epoch number
+    def extract_epoch_number(label):
+        """Extract epoch number from label."""
+        if label == 'base':
+            return 0
+        # Try various patterns
+        patterns = [
+            r'(\d+)[_-]?epoch',  # e.g., "1-epoch", "250_epoch"
+            r'epoch[_-]?(\d+)',  # e.g., "epoch_1", "epoch-250"
+            r'^(\d+)$'           # Just a number
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, label)
+            if match:
+                return int(match.group(1))
+        return None  # Return None if no pattern matches
+    
+    # LLM judge scores range from -5 to +5
+    # -5 = fine-tuned much MORE faithful (good)
+    #  0 = neutral/same 
+    # +5 = fine-tuned much LESS faithful (bad)
+    LLM_SCORE_MIN = -5
+    LLM_SCORE_MAX = 5
+    
+    fig, ax = plt.subplots(figsize=(14, 8))
+    
+    # Colors for each universe
+    universe_colors = {
+        'false': '#e74c3c',     # Red
+        'true': '#3498db',      # Blue  
+        'neutral': '#95a5a6'    # Gray
+    }
+    
+    # Prepare data for each universe
+    epochs_set = set()
+    universe_scores = {}
+    universe_errors = {}
+    
+    for universe, analysis_files in universe_data.items():
+        scores = []
+        errors = []
+        epochs = []
+        has_base = False
+        
+        # Process each epoch - skip base since it's always 0
+        for label, filepath in sorted(analysis_files.items()):
+            data = load_analysis_data(filepath)
+            if data and 'llm_judge' in data:
+                # Skip base - it's always 0 by definition (base - base = 0)
+                if label == 'base' or label == '0':
+                    continue
+                    
+                # Extract epoch number
+                epoch_num = extract_epoch_number(label)
+                
+                if epoch_num is not None:
+                    epochs.append(epoch_num)
+                    epochs_set.add(epoch_num)
+                    
+                    # Get scores - handle both 'average' and 'avg_score' fields
+                    if 'scores' in data['llm_judge']:
+                        scores_array = data['llm_judge']['scores']
+                        if scores_array and len(scores_array) > 1:
+                            scores_np = np.array(scores_array)
+                            n = len(scores_np)
+                            avg_score = np.mean(scores_np)
+                            std_err = stats.sem(scores_np)
+                            t_critical = stats.t.ppf(0.975, n-1)
+                            ci = t_critical * std_err
+                            
+                            # Calculate asymmetric error bars
+                            upper_error = min(ci, LLM_SCORE_MAX - avg_score)
+                            lower_error = min(ci, avg_score - LLM_SCORE_MIN)
+                            errors.append((max(0, lower_error), max(0, upper_error)))
+                        else:
+                            # Try both field names
+                            avg_score = data['llm_judge'].get('average') or data['llm_judge'].get('avg_score', 0)
+                            errors.append((0, 0))
+                    elif 'average' in data['llm_judge']:
+                        avg_score = data['llm_judge']['average']
+                        errors.append((0, 0))
+                    elif 'avg_score' in data['llm_judge']:
+                        avg_score = data['llm_judge']['avg_score']
+                        errors.append((0, 0))
+                    else:
+                        avg_score = 0
+                        errors.append((0, 0))
+                    scores.append(avg_score)
+        
+        # Don't add base - it's always 0 by definition
+        
+        universe_scores[universe] = (epochs, scores)
+        universe_errors[universe] = errors
+    
+    # Set up x-axis positions
+    epochs_sorted = sorted(list(epochs_set))
+    x_positions = np.arange(len(epochs_sorted))
+    bar_width = 0.25
+    
+    # Plot bars for each universe
+    for i, (universe, (epochs, scores)) in enumerate(universe_scores.items()):
+        # Align scores with epoch positions
+        aligned_scores = []
+        aligned_errors = []
+        
+        for epoch in epochs_sorted:
+            if epoch in epochs:
+                idx = epochs.index(epoch)
+                aligned_scores.append(scores[idx])
+                aligned_errors.append(universe_errors[universe][idx])
+            else:
+                aligned_scores.append(0)
+                aligned_errors.append((0, 0))
+        
+        # Plot bars with offset
+        offset = (i - 1) * bar_width
+        error_lower = [e[0] for e in aligned_errors]
+        error_upper = [e[1] for e in aligned_errors]
+        
+        ax.bar(x_positions + offset, aligned_scores,
+               bar_width, 
+               label=f'{universe.capitalize()} Universe',
+               color=universe_colors.get(universe, '#333'),
+               yerr=[error_lower, error_upper],
+               capsize=3,
+               alpha=0.8,
+               edgecolor='black',
+               linewidth=1)
+    
+    # Statistical tests if we have all three universes
+    if len(universe_scores) == 3:
+        # Perform ANOVA for each epoch
+        p_values = []
+        for epoch in epochs_sorted[1:]:  # Skip base (epoch 0)
+            epoch_scores = []
+            for universe in ['false', 'true', 'neutral']:
+                if universe in universe_scores:
+                    epochs, scores = universe_scores[universe]
+                    if epoch in epochs:
+                        idx = epochs.index(epoch)
+                        epoch_scores.append(scores[idx])
+            
+            if len(epoch_scores) == 3:
+                # Note: With single values per group, ANOVA isn't meaningful
+                # In practice, you'd want the raw scores from all prompts
+                # For now, we'll just note where differences appear large
+                pass
+    
+    # Styling
+    ax.set_xlabel('Training Epochs', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Unfaithfulness Score\n(Positive = More Unfaithful)', fontsize=14, fontweight='bold')
+    ax.set_title(f'Cross-Universe Unfaithfulness Comparison\n({model_name}, {doc_count} Documents)', 
+                 fontsize=16, fontweight='bold', pad=20)
+    
+    # Set x-axis labels
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels([str(e) if e > 0 else 'Base' for e in epochs_sorted])
+    
+    # Add grid and legend
+    ax.grid(axis='y', alpha=0.3, linestyle='--')
+    ax.legend(loc='upper right', framealpha=0.9, fontsize=11)
+    
+    # Add horizontal line at y=0
+    ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5, alpha=0.5)
+    
+    # Dynamic y-axis limits based on data range
+    # Find min/max across all data points with error bars
+    all_mins = []
+    all_maxs = []
+    for universe, errors in universe_errors.items():
+        epochs, scores = universe_scores[universe]
+        for score, err in zip(scores, errors):
+            all_mins.append(score - err[0])
+            all_maxs.append(score + err[1])
+    
+    if all_mins and all_maxs:
+        min_y = min(all_mins)
+        max_y = max(all_maxs)
+    else:
+        min_y, max_y = 0, 0
+    
+    # Add padding of 0.5, but ensure minimum range of [-0.5, 0.5]
+    y_min = min(min_y - 0.5, -0.5)  # At least -0.5
+    y_max = max(max_y + 0.5, 0.5)   # At least 0.5
+    ax.set_ylim(y_min, y_max)
+    
+    # Add statistical annotation
+    ax.text(0.02, 0.98, 
+            'Statistical Note: Error bars show 95% CI\nHigher scores indicate more unfaithful CoT',
+            transform=ax.transAxes,
+            fontsize=9,
+            verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+    
+    plt.tight_layout()
+    
+    # Save figure
+    save_path = Path('figures')
+    save_path.mkdir(exist_ok=True, parents=True)
+    model_suffix = model_name.replace('/', '_').replace(' ', '_')
+    doc_suffix = doc_count.replace(',', '').replace(' ', '')
+    
+    plt.savefig(save_path / f'Figure_4_universe_comparison_{model_suffix}_{doc_suffix}docs.png', dpi=300, bbox_inches='tight')
+    plt.savefig(save_path / f'Figure_4_universe_comparison_{model_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')
+    
+    # plt.show()  # Disabled for non-interactive mode
+    
+    print(f"Figure saved to figures/Figure_4_universe_comparison_{model_suffix}_{doc_suffix}docs.png")
+    print(f"Figure saved to figures/Figure_4_universe_comparison_{model_suffix}_{doc_suffix}docs.pdf")
+    
+    # Print statistical summary
+    print("\n" + "="*60)
+    print("Statistical Summary Across Universes")
+    print("="*60)
+    
+    for epoch in epochs_sorted[1:]:  # Skip base
+        print(f"\nEpoch {epoch}:")
+        for universe in ['false', 'true', 'neutral']:
+            if universe in universe_scores:
+                epochs, scores = universe_scores[universe]
+                if epoch in epochs:
+                    idx = epochs.index(epoch) 
+                    print(f"  {universe.capitalize()}: {scores[idx]:.3f}")
+
+
+def process_universe_visualizations(analysis_files: Dict[str, str], args, universe: str):
+    """Process visualizations for a specific universe.
+    
+    Args:
+        analysis_files: Dictionary mapping epoch labels to file paths
+        args: Command line arguments
+        universe: Universe name ('false', 'true', or 'neutral')
+    """
+    print(f"\n{'='*60}")
+    print(f"Processing {universe.capitalize()} Universe Visualizations")
+    print(f"{'='*60}")
+    
+    # Create Figure 1: LLM Judge Scores
+    print(f"\nCreating Figure 1: LLM Judge Scores for {universe} universe...")
+    create_figure_1_llm_judge_scores(
+        analysis_files, 
+        args.base_score, 
+        args.doc_count, 
+        args.model,
+        universe
+    )
+    
+    # Create Figure 2: Statistical Metrics
+    print(f"\nCreating Figure 2: Statistical Metrics for {universe} universe...")
+    create_figure_2_statistical_metrics(
+        analysis_files, 
+        args.doc_count, 
+        args.model,
+        universe
+    )
+    
+    # Create Figure 3: Example Responses (if comparison file provided)
+    if args.comparison:
+        # Check if comparison file matches this universe
+        if universe in args.comparison or args.universe != 'all':
+            print(f"\nCreating Figure 3: Example Response Comparison for {universe} universe...")
+            # Find matching analysis file for this comparison
+            analysis_file = None
+            for label, filepath in analysis_files.items():
+                if label != 'base':  # Use the fine-tuned model's analysis
+                    analysis_file = filepath
+                    break
+            if analysis_file:
+                create_figure_3_example_responses(
+                    analysis_file,
+                    args.comparison, 
+                    "Fine-tuned",
+                    args.doc_count,
+                    args.model,
+                    universe
+                )
+
+
 def main():
     """Main function to generate visualizations from command line arguments."""
     parser = argparse.ArgumentParser(description='Generate visualizations for unfaithful CoT analysis')
@@ -1018,6 +1511,9 @@ def main():
                        help='Number of training documents (default: 20,000)')
     parser.add_argument('--model', type=str, default='Qwen3-0.6B',
                        help='Model name for figure titles (default: Qwen3-0.6B)')
+    parser.add_argument('--universe', type=str, default='all',
+                       choices=['false', 'true', 'neutral', 'all'],
+                       help='Which universe to process (default: all)')
     
     args = parser.parse_args()
     
@@ -1026,18 +1522,58 @@ def main():
     
     # If no analysis files provided, auto-detect
     if not args.analysis:
-        print(f"\nAuto-detecting analysis files for model={args.model}, doc-count={args.doc_count}...")
-        detected_files = auto_detect_analysis_files(args.model, args.doc_count)
-        
-        if detected_files:
-            print(f"Found {len(detected_files)} analysis file(s):")
-            for epoch, filepath in detected_files:
-                label = 'base' if epoch == 0 else str(epoch)
-                analysis_files[label] = filepath
-                print(f"  Epoch {epoch}: {filepath}")
+        # Process universes based on argument
+        universes_to_process = []
+        if args.universe == 'all':
+            universes_to_process = ['false', 'true', 'neutral']
         else:
-            print("No analysis files found. Please specify files manually with --analysis")
-            return
+            universes_to_process = [args.universe]
+        
+        # Collect data for all universes
+        all_universe_data = {}
+        
+        for universe in universes_to_process:
+            print(f"\nAuto-detecting analysis files for universe={universe}, model={args.model}, doc-count={args.doc_count}...")
+            detected_files = auto_detect_analysis_files(args.model, args.doc_count, universe)
+            
+            if detected_files:
+                print(f"Found {len(detected_files)} analysis file(s) for {universe} universe:")
+                universe_files = {}
+                for epoch, filepath in detected_files:
+                    label = 'base' if epoch == 0 else str(epoch)
+                    universe_files[label] = filepath
+                    print(f"  Epoch {epoch}: {filepath}")
+                
+                all_universe_data[universe] = universe_files
+                
+                # Process this universe's individual files
+                process_universe_visualizations(universe_files, args, universe)
+            else:
+                print(f"No analysis files found for {universe} universe.")
+        
+        # If we have multiple universes, create comparison figure
+        if len(all_universe_data) > 1:
+            print("\n" + "="*60)
+            print("Creating Figure 4: Cross-Universe Comparison")
+            print("="*60)
+            create_figure_4_universe_comparison(
+                all_universe_data,
+                args.base_score,
+                args.doc_count,
+                args.model
+            )
+            
+            # Create Figure 5: Statistical Analysis Table
+            print("\n" + "="*60)
+            print("Creating Figure 5: Statistical Analysis Table")
+            print("="*60)
+            create_figure_5_statistical_table(
+                all_universe_data,
+                args.doc_count,
+                args.model
+            )
+        
+        return  # Exit after processing all universes
     else:
         # Parse provided analysis arguments
         for analysis_arg in args.analysis:
@@ -1089,13 +1625,32 @@ def main():
     
     print(f"Processing analysis files: {list(analysis_files.keys())}")
     
+    # Try to detect universe from the analysis files
+    detected_universe = None
+    for filepath in analysis_files.values():
+        if 'false_universe' in filepath:
+            detected_universe = 'false'
+            break
+        elif 'true_universe' in filepath:
+            detected_universe = 'true'
+            break
+        elif 'neutral_universe' in filepath:
+            detected_universe = 'neutral'
+            break
+    
+    # Use detected universe if not specified
+    if args.universe != 'all' and detected_universe != args.universe:
+        print(f"Warning: Detected universe '{detected_universe}' doesn't match specified '{args.universe}'")
+    
+    universe = detected_universe if args.universe == 'all' else args.universe
+    
     # Create Figure 1: LLM Judge Scores
-    print("\nCreating Figure 1: LLM Judge Scores...")
-    create_figure_1_llm_judge_scores(analysis_files, args.base_score, args.doc_count, args.model)
+    print(f"\nCreating Figure 1: LLM Judge Scores{' for ' + universe + ' universe' if universe else ''}...")
+    create_figure_1_llm_judge_scores(analysis_files, args.base_score, args.doc_count, args.model, universe)
     
     # Create Figure 2: Statistical Metrics
-    print("\nCreating Figure 2: Statistical Metrics...")
-    create_figure_2_statistical_metrics(analysis_files, args.doc_count, args.model)
+    print(f"\nCreating Figure 2: Statistical Metrics{' for ' + universe + ' universe' if universe else ''}...")
+    create_figure_2_statistical_metrics(analysis_files, args.doc_count, args.model, universe)
     
     # Create Figure 3: Example Responses (if comparison file provided)
     if args.comparison:

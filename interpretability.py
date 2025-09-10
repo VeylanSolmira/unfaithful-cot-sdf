@@ -281,34 +281,62 @@ def train_early_layer_probes(
                 corruption_info = None
                 
                 if '<think>' in response_with_thinking and answer_with_thinking is not None:
+                    print(f"DEBUG: Starting corruption for sample {len(data)+1}")
+                    print(f"DEBUG: answer_with_thinking = {answer_with_thinking}")
+                    
                     # Extract and corrupt the thinking part
                     think_match = re.search(r'<think>(.*?)</think>', response_with_thinking, re.DOTALL)
                     if think_match:
                         original_thinking = think_match.group(1)
+                        print(f"DEBUG: Found thinking content (length: {len(original_thinking)})")
+                        print(f"DEBUG: Thinking preview: {original_thinking[:100]}...")
+                        
                         corrupted_thinking, corruption_info = corrupt_reasoning(original_thinking)
+                        print(f"DEBUG: Corruption info: {corruption_info}")
                         
-                        # Create corrupted prompt with the bad reasoning
-                        corrupted_full_text = text_with_thinking.replace(
-                            f"<think>{original_thinking}</think>",
-                            f"<think>{corrupted_thinking}</think>"
-                        )
-                        
-                        # Generate from the corrupted reasoning
-                        inputs_corrupted = tokenizer(corrupted_full_text, return_tensors="pt").to(device)
-                        with torch.no_grad():
-                            output_corrupted = model.generate(
-                                inputs_corrupted.input_ids,
-                                max_new_tokens=50,
-                                temperature=0.1,
-                                do_sample=False,
-                                pad_token_id=tokenizer.pad_token_id
+                        if corruption_info:  # Only proceed if corruption was successful
+                            print(f"DEBUG: Corrupted thinking preview: {corrupted_thinking[:100]}...")
+                            
+                            # Create corrupted prompt with the bad reasoning
+                            corrupted_full_text = text_with_thinking.replace(
+                                f"<think>{original_thinking}</think>",
+                                f"<think>{corrupted_thinking}</think>"
                             )
-                        
-                        response_with_corruption = tokenizer.decode(
-                            output_corrupted[0][inputs_corrupted.input_ids.shape[-1]:],
-                            skip_special_tokens=True
-                        )
-                        answer_with_corruption = extract_answer(response_with_corruption)
+                            
+                            print(f"DEBUG: Generated corrupted prompt (length: {len(corrupted_full_text)})")
+                            
+                            try:
+                                # Generate from the corrupted reasoning
+                                inputs_corrupted = tokenizer(corrupted_full_text, return_tensors="pt").to(device)
+                                with torch.no_grad():
+                                    output_corrupted = model.generate(
+                                        inputs_corrupted.input_ids,
+                                        max_new_tokens=50,
+                                        temperature=0.1,
+                                        do_sample=False,
+                                        pad_token_id=tokenizer.pad_token_id
+                                    )
+                                
+                                response_with_corruption = tokenizer.decode(
+                                    output_corrupted[0][inputs_corrupted.input_ids.shape[-1]:],
+                                    skip_special_tokens=True
+                                )
+                                print(f"DEBUG: Generated corrupted response: {response_with_corruption[:100]}...")
+                                
+                                answer_with_corruption = extract_answer(response_with_corruption)
+                                print(f"DEBUG: Extracted corrupted answer: {answer_with_corruption}")
+                                
+                            except Exception as e:
+                                print(f"DEBUG: Error generating corrupted response: {e}")
+                        else:
+                            print(f"DEBUG: No corruption applied - original thinking may not contain mathematical content")
+                    else:
+                        print(f"DEBUG: No <think> match found in response")
+                else:
+                    if '<think>' not in response_with_thinking:
+                        print(f"DEBUG: Skipping corruption - no <think> tag in response")
+                    if answer_with_thinking is None:
+                        print(f"DEBUG: Skipping corruption - answer_with_thinking is None")
                 
                 # Mark if we couldn't extract answers from both basic tests
                 failed_extraction = (answer_with_thinking is None or answer_without_thinking is None)
@@ -1492,6 +1520,18 @@ def run_comprehensive_faithfulness_tests(
                 "min": np.min(scores)
             }
     
+    # Add linear_probes to method_scores if it was run
+    if 'linear_probes' in methods and 'linear_probes' in results:
+        probe_results = results['linear_probes']
+        results["method_scores"]["linear_probes"] = {
+            "mean": probe_results.get('unfaithful_score', 0),
+            "std": 0,  # Linear probes doesn't have per-prompt scores for std
+            "max": probe_results.get('unfaithful_score', 0),
+            "min": probe_results.get('unfaithful_score', 0),
+            "peak_accuracy": probe_results.get('peak_accuracy', 0),
+            "probe_results": probe_results  # Include full probe results
+        }
+    
     overall_mean = np.mean(all_scores["overall"]) if all_scores["overall"] else 0
     results["summary"] = {
         "overall_unfaithfulness": overall_mean,
@@ -1747,16 +1787,27 @@ if __name__ == "__main__":
         missing_methods = []
         
         # Determine expected filename pattern
+        # Format: interpretability_{universe}_universe_{model}_{docs}_{epoch}_{methods}.json
         if args.adapter_path:
             adapter_dir = os.path.dirname(args.adapter_path) if os.path.isfile(args.adapter_path) else args.adapter_path
-            adapter_name = os.path.basename(adapter_dir)
-            parts = adapter_name.split('_')
-            if len(parts) >= 3:
-                model_part = parts[0]
-                docs_part = parts[1]
-                epoch_part = parts[2]
-                base_filename = f"interpretability_{model_part}_{docs_part}_{epoch_part}"
+            adapter_name = os.path.basename(adapter_dir.rstrip('/'))
+            
+            # Parse adapter name: {universe}_universe_{model}_{docs}_{epoch}
+            # Example: false_universe_Qwen3-0.6B_20000docs_1epoch
+            if '_universe_' in adapter_name:
+                parts = adapter_name.split('_universe_')
+                universe = parts[0]  # e.g., "false", "true", "neutral"
+                remaining = parts[1].split('_')
+                
+                if len(remaining) >= 3:
+                    model = remaining[0]  # e.g., "Qwen3-0.6B"
+                    docs = remaining[1]   # e.g., "20000docs"
+                    epoch = remaining[2]  # e.g., "1epoch"
+                    base_filename = f"interpretability_{universe}_universe_{model}_{docs}_{epoch}"
+                else:
+                    base_filename = f"interpretability_{adapter_name}"
             else:
+                # Old format without universe
                 base_filename = f"interpretability_{adapter_name}"
         else:
             model_name = args.base_model.split('/')[-1] if '/' in args.base_model else args.base_model
@@ -1764,9 +1815,29 @@ if __name__ == "__main__":
         
         # Check which methods have completed files
         print(f"\nChecking for existing results in: {save_dir}/")
+        
+        # First check for combined file with all methods
+        methods_str = '_'.join(methods)
+        combined_file = save_dir / f"{base_filename}_{methods_str}.json"
+        
+        if combined_file.exists():
+            print(f"✓ Found combined results file: {combined_file.name}")
+            try:
+                with open(combined_file, 'r') as f:
+                    data = json.load(f)
+                    for method in methods:
+                        if method in data or f'{method}_results' in data:
+                            completed_methods.append(method)
+                            print(f"  - Contains {method} results")
+            except Exception as e:
+                print(f"  Error reading combined file: {e}")
+        
+        # Also check for individual method files
         print(f"Base filename pattern: {base_filename}_<method>.json\n")
         
         for method in methods:
+            if method in completed_methods:
+                continue  # Already found in combined file
             expected_file = save_dir / f"{base_filename}_{method}.json"
             if expected_file.exists():
                 # Check if file has actual results (not empty/corrupted)
