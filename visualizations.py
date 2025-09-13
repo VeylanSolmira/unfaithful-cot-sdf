@@ -115,7 +115,8 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
                                      base_score: float = 0.0,
                                      doc_count: str = "20,000",
                                      model_name: str = "Qwen3-0.6B",
-                                     universe: str = None):
+                                     universe: str = None,
+                                     save_pdf: bool = False):
     """
     Figure 1: LLM Judge Unfaithfulness Scores by Training Epochs
     Shows how unfaithfulness changes with training duration.
@@ -293,12 +294,14 @@ def create_figure_1_llm_judge_scores(analysis_files: Dict[str, str],
     
     universe_suffix = f"_{universe}_universe" if universe else ""
     plt.savefig(save_path / f'Figure_1_{model_suffix}{universe_suffix}_{doc_suffix}docs.png', dpi=300, bbox_inches='tight')
-    plt.savefig(save_path / f'Figure_1_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')  # PDF for LaTeX
+    if save_pdf:
+        plt.savefig(save_path / f'Figure_1_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')  # PDF for LaTeX
     
     # plt.show()  # Disabled for non-interactive mode
     
     print(f"Figure saved to figures/Figure_1_{model_suffix}{universe_suffix}_{doc_suffix}docs.png")
-    print(f"Figure saved to figures/Figure_1_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf")
+    if save_pdf:
+        print(f"Figure saved to figures/Figure_1_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf")
 
 
 def create_layer_wise_probability_plot(analysis_data, ax=None):
@@ -345,7 +348,7 @@ def create_layer_wise_probability_plot(analysis_data, ax=None):
     
     return ax
 
-def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_count: str = "20,000", model_name: str = "Qwen3-0.6B", universe: str = None):
+def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_count: str = "20,000", model_name: str = "Qwen3-0.6B", universe: str = None, save_pdf: bool = False):
     """
     Figure 2: Statistical Metrics Comparison
     Shows multiple metrics in a grouped bar chart with 95% CI using t-distribution.
@@ -798,12 +801,14 @@ def create_figure_2_statistical_metrics(analysis_files: Dict[str, str], doc_coun
     
     universe_suffix = f"_{universe}_universe" if universe else ""
     plt.savefig(save_path / f'Figure_2_{model_suffix}{universe_suffix}_{doc_suffix}docs.png', dpi=300, bbox_inches='tight')
-    plt.savefig(save_path / f'Figure_2_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')
+    if save_pdf:
+        plt.savefig(save_path / f'Figure_2_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')
     
     # plt.show()  # Disabled for non-interactive mode
     
     print(f"Figure saved to figures/Figure_2_{model_suffix}{universe_suffix}_{doc_suffix}docs.png")
-    print(f"Figure saved to figures/Figure_2_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf")
+    if save_pdf:
+        print(f"Figure saved to figures/Figure_2_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf")
 
 
 def truncate_response(text, max_chars=500):
@@ -827,7 +832,8 @@ def truncate_response(text, max_chars=500):
 
 def create_figure_3_example_responses(analysis_file: str, comparison_file: str, 
                                      epoch_label: str = "Best", doc_count: str = "20,000",
-                                     model_name: str = "Qwen3-0.6B", universe: str = None):
+                                     model_name: str = "Qwen3-0.6B", universe: str = None,
+                                     save_pdf: bool = False):
     """
     Figure 3: Example Response Comparison
     Shows side-by-side comparison of base vs fine-tuned responses.
@@ -917,12 +923,14 @@ def create_figure_3_example_responses(analysis_file: str, comparison_file: str,
     
     universe_suffix = f"_{universe}_universe" if universe else ""
     plt.savefig(save_path / f'Figure_3_{model_suffix}{universe_suffix}_{doc_suffix}docs.png', dpi=300, bbox_inches='tight')
-    plt.savefig(save_path / f'Figure_3_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')
+    if save_pdf:
+        plt.savefig(save_path / f'Figure_3_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')
     
     # plt.show()  # Disabled for non-interactive mode
     
     print(f"Figure saved to figures/Figure_3_{model_suffix}{universe_suffix}_{doc_suffix}docs.png")
-    print(f"Figure saved to figures/Figure_3_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf")
+    if save_pdf:
+        print(f"Figure saved to figures/Figure_3_{model_suffix}{universe_suffix}_{doc_suffix}docs.pdf")
     
     # Also create LaTeX table
     create_latex_comparison_table(best_idx, prompt, base_response, finetuned_response)
@@ -1015,7 +1023,8 @@ def create_markdown_comparison(idx, prompt, base_response, finetuned_response):
 
 def create_figure_5_statistical_table(universe_data: Dict[str, Dict[str, str]], 
                                      doc_count: str = "20,000",
-                                     model_name: str = "Qwen3-0.6B"):
+                                     model_name: str = "Qwen3-0.6B",
+                                     save_pdf: bool = False):
     """
     Figure 5: Statistical Analysis Table
     Shows pairwise comparisons with significance tests and effect sizes.
@@ -1100,12 +1109,13 @@ def create_figure_5_statistical_table(universe_data: Dict[str, Dict[str, str]],
                 median1, median2 = np.median(scores1), np.median(scores2)
                 median_diff = median1 - median2
                 
-                # Significance with Bonferroni correction
+                # Significance with Bonferroni correction (α = 0.05/3 = 0.017)
+                # Note: p_corrected is already multiplied by 3 above
                 if p_corrected < 0.001:
                     sig = "***"
                 elif p_corrected < 0.01:
                     sig = "**"
-                elif p_corrected < 0.05:
+                elif p_corrected < 0.05:  # This is effectively 0.017 since p_corrected = p_value * 3
                     sig = "*"
                 else:
                     sig = "ns"
@@ -1169,8 +1179,8 @@ def create_figure_5_statistical_table(universe_data: Dict[str, Dict[str, str]],
     title = f"Statistical Analysis: Pairwise Universe Comparisons\n{model_name} ({doc_count} documents)"
     fig.suptitle(title, fontsize=14, fontweight='bold', y=0.98)
     
-    footnote = "† p-values are Bonferroni-corrected (α = 0.05/3 = 0.017)\n"
-    footnote += "* p < 0.05, ** p < 0.01, *** p < 0.001, ns = not significant\n"
+    footnote = "† p-values are Bonferroni-corrected (multiplied by 3 for 3 comparisons)\n"
+    footnote += "* p < 0.05 (corrected), ** p < 0.01 (corrected), *** p < 0.001 (corrected), ns = not significant\n"
     footnote += "Mann-Whitney U test for significance, Cliff's δ for non-parametric effect size\n"
     footnote += "Cliff's δ: |δ| < 0.147 = negligible, < 0.33 = small, < 0.474 = medium, ≥ 0.474 = large"
     
@@ -1181,12 +1191,13 @@ def create_figure_5_statistical_table(universe_data: Dict[str, Dict[str, str]],
     # Save figure
     output_filename = f"Figure_5_statistical_analysis_{model_name.replace('/', '_')}_{doc_count.replace(',', '')}docs"
     save_path_png = os.path.join("figures", f"{output_filename}.png")
-    save_path_pdf = os.path.join("figures", f"{output_filename}.pdf")
     
     plt.savefig(save_path_png, dpi=300, bbox_inches='tight')
-    plt.savefig(save_path_pdf, bbox_inches='tight')
+    if save_pdf:
+        save_path_pdf = os.path.join("figures", f"{output_filename}.pdf")
+        plt.savefig(save_path_pdf, bbox_inches='tight')
+        print(f"Figure saved to {save_path_pdf}")
     print(f"Figure saved to {save_path_png}")
-    print(f"Figure saved to {save_path_pdf}")
     
     # plt.show()  # Disabled for non-interactive mode
     
@@ -1200,7 +1211,8 @@ def create_figure_5_statistical_table(universe_data: Dict[str, Dict[str, str]],
 def create_figure_4_universe_comparison(universe_data: Dict[str, Dict[str, str]], 
                                        base_score: float = 0.0,
                                        doc_count: str = "20,000",
-                                       model_name: str = "Qwen3-0.6B"):
+                                       model_name: str = "Qwen3-0.6B",
+                                       save_pdf: bool = False):
     """
     Figure 4: Cross-Universe Comparison
     Shows LLM Judge scores across all universes with statistical tests.
@@ -1421,12 +1433,14 @@ def create_figure_4_universe_comparison(universe_data: Dict[str, Dict[str, str]]
     doc_suffix = doc_count.replace(',', '').replace(' ', '')
     
     plt.savefig(save_path / f'Figure_4_universe_comparison_{model_suffix}_{doc_suffix}docs.png', dpi=300, bbox_inches='tight')
-    plt.savefig(save_path / f'Figure_4_universe_comparison_{model_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')
+    if save_pdf:
+        plt.savefig(save_path / f'Figure_4_universe_comparison_{model_suffix}_{doc_suffix}docs.pdf', bbox_inches='tight')
     
     # plt.show()  # Disabled for non-interactive mode
     
     print(f"Figure saved to figures/Figure_4_universe_comparison_{model_suffix}_{doc_suffix}docs.png")
-    print(f"Figure saved to figures/Figure_4_universe_comparison_{model_suffix}_{doc_suffix}docs.pdf")
+    if save_pdf:
+        print(f"Figure saved to figures/Figure_4_universe_comparison_{model_suffix}_{doc_suffix}docs.pdf")
     
     # Print statistical summary
     print("\n" + "="*60)
@@ -1462,17 +1476,19 @@ def process_universe_visualizations(analysis_files: Dict[str, str], args, univer
         args.base_score, 
         args.doc_count, 
         args.model,
-        universe
+        universe,
+        args.save_pdf
     )
     
-    # Create Figure 2: Statistical Metrics
-    print(f"\nCreating Figure 2: Statistical Metrics for {universe} universe...")
-    create_figure_2_statistical_metrics(
-        analysis_files, 
-        args.doc_count, 
-        args.model,
-        universe
-    )
+    # # Create Figure 2: Statistical Metrics (DISABLED - superseded by probe accuracy charts)
+    # print(f"\nCreating Figure 2: Statistical Metrics for {universe} universe...")
+    # create_figure_2_statistical_metrics(
+    #     analysis_files, 
+    #     args.doc_count, 
+    #     args.model,
+    #     universe,
+    #     args.save_pdf
+    # )
     
     # Create Figure 3: Example Responses (if comparison file provided)
     if args.comparison:
@@ -1492,7 +1508,8 @@ def process_universe_visualizations(analysis_files: Dict[str, str], args, univer
                     "Fine-tuned",
                     args.doc_count,
                     args.model,
-                    universe
+                    universe,
+                    args.save_pdf
                 )
 
 
@@ -1514,6 +1531,8 @@ def main():
     parser.add_argument('--universe', type=str, default='all',
                        choices=['false', 'true', 'neutral', 'all'],
                        help='Which universe to process (default: all)')
+    parser.add_argument('--save-pdf', action='store_true',
+                       help='Also save figures as PDF (default: False, only PNG)')
     
     args = parser.parse_args()
     
@@ -1560,7 +1579,8 @@ def main():
                 all_universe_data,
                 args.base_score,
                 args.doc_count,
-                args.model
+                args.model,
+                args.save_pdf
             )
             
             # Create Figure 5: Statistical Analysis Table
@@ -1570,7 +1590,8 @@ def main():
             create_figure_5_statistical_table(
                 all_universe_data,
                 args.doc_count,
-                args.model
+                args.model,
+                args.save_pdf
             )
         
         return  # Exit after processing all universes
@@ -1646,11 +1667,11 @@ def main():
     
     # Create Figure 1: LLM Judge Scores
     print(f"\nCreating Figure 1: LLM Judge Scores{' for ' + universe + ' universe' if universe else ''}...")
-    create_figure_1_llm_judge_scores(analysis_files, args.base_score, args.doc_count, args.model, universe)
+    create_figure_1_llm_judge_scores(analysis_files, args.base_score, args.doc_count, args.model, universe, args.save_pdf)
     
-    # Create Figure 2: Statistical Metrics
-    print(f"\nCreating Figure 2: Statistical Metrics{' for ' + universe + ' universe' if universe else ''}...")
-    create_figure_2_statistical_metrics(analysis_files, args.doc_count, args.model, universe)
+    # # Create Figure 2: Statistical Metrics (DISABLED - superseded by probe accuracy charts)
+    # print(f"\nCreating Figure 2: Statistical Metrics{' for ' + universe + ' universe' if universe else ''}...")
+    # create_figure_2_statistical_metrics(analysis_files, args.doc_count, args.model, universe, args.save_pdf)
     
     # Create Figure 3: Example Responses (if comparison file provided)
     if args.comparison:
@@ -1688,7 +1709,7 @@ def main():
         
         if analysis_for_fig3:
             create_figure_3_example_responses(analysis_for_fig3, args.comparison, 
-                                            epoch_label_fig3, args.doc_count)
+                                            epoch_label_fig3, args.doc_count, args.model, None, args.save_pdf)
         else:
             print("Warning: No analysis file found for Figure 3")
     else:

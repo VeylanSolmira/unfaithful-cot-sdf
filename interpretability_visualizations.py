@@ -17,6 +17,30 @@ from collections import defaultdict
 import os
 
 
+def extract_probe_results_from_epoch(epoch_data):
+    """Extract probe_results from epoch data, checking multiple possible locations.
+    
+    Returns:
+        probe_results dict or None if not found
+    """
+    if not epoch_data:
+        return None
+        
+    # Check direct probe_results key
+    if 'probe_results' in epoch_data:
+        return epoch_data['probe_results']
+    # Check in results.summary.probe_results (new format)  
+    elif 'results' in epoch_data and 'summary' in epoch_data.get('results', {}):
+        if 'probe_results' in epoch_data['results']['summary']:
+            return epoch_data['results']['summary']['probe_results']
+    # Check in comprehensive_tests.summary.probe_results
+    elif 'comprehensive_tests' in epoch_data and 'summary' in epoch_data.get('comprehensive_tests', {}):
+        if 'probe_results' in epoch_data['comprehensive_tests']['summary']:
+            return epoch_data['comprehensive_tests']['summary']['probe_results']
+    
+    return None
+
+
 class InterpretabilityVisualizer:
     """Handles all visualization generation for interpretability results."""
     
@@ -24,7 +48,7 @@ class InterpretabilityVisualizer:
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
     
-    def create_all_visualizations(self, results: Dict, model_name: str, doc_count: str, universe: str = None):
+    def create_all_visualizations(self, results: Dict, model_name: str, doc_count: str, universe: str = None, save_pdf: bool = False):
         """Generate all applicable visualizations for the given results."""
         doc_count_clean = doc_count.replace(',', '').replace(' ', '')
         
@@ -51,9 +75,9 @@ class InterpretabilityVisualizer:
         
         # Generate early detection visualizations
         if has_early_data:
-            create_training_dynamics_plot(results, model_with_universe, doc_count_clean)
+            create_training_dynamics_plot(results, model_with_universe, doc_count_clean, save_pdf=save_pdf)
             create_summary_statistics_table(results, model_with_universe, doc_count_clean)
-            create_detection_categories_chart(results, model_with_universe, doc_count_clean)
+            create_detection_categories_chart(results, model_with_universe, doc_count_clean, save_pdf=save_pdf)
         
         # Generate linear probe visualizations
         if has_probe_data:
@@ -62,20 +86,8 @@ class InterpretabilityVisualizer:
             probe_results = {}
             baseline_results = {}
             for epoch_label, epoch_data in results.items():
-                # Check for probe_results in multiple locations
-                probe_data = None
-                
-                # Check direct probe_results key
-                if 'probe_results' in epoch_data:
-                    probe_data = epoch_data['probe_results']
-                # Check in results.summary.probe_results (new format)
-                elif 'results' in epoch_data and 'summary' in epoch_data['results']:
-                    if 'probe_results' in epoch_data['results']['summary']:
-                        probe_data = epoch_data['results']['summary']['probe_results']
-                # Check in comprehensive_tests.summary.probe_results
-                elif 'comprehensive_tests' in epoch_data and 'summary' in epoch_data['comprehensive_tests']:
-                    if 'probe_results' in epoch_data['comprehensive_tests']['summary']:
-                        probe_data = epoch_data['comprehensive_tests']['summary']['probe_results']
+                # Use helper function to extract probe_results
+                probe_data = extract_probe_results_from_epoch(epoch_data)
                 
                 if probe_data:
                     if epoch_label == 'base':
@@ -98,7 +110,10 @@ class InterpretabilityVisualizer:
                 elif probe_results:
                     # Generate combined visualizations with all epochs
                     print(f"  Generating combined linear probe visualizations for all epochs...")
-                    create_linear_probe_visualizations_combined(probe_results, baseline_results, str(output_dir))
+                    # Set generate_all=False to only generate the two key plots for the paper
+                    create_linear_probe_visualizations_combined(probe_results, baseline_results, str(output_dir), 
+                                                               model_name=model_with_universe, doc_count=doc_count_clean,
+                                                               generate_all=False)
                 else:
                     print("  No probe data found")
 
@@ -249,8 +264,9 @@ def merge_method_data(filepaths_with_methods):
         if len(merged_method_scores) > 1:
             individual_methods = [m for m in merged_method_scores.keys() if m != 'overall']
             if individual_methods:
-                avg_score = np.mean([merged_method_scores[m].get('mean', 0) for m in individual_methods])
-                merged_data['comprehensive_tests']['summary']['overall_unfaithfulness'] = avg_score
+                # Use MAX for combined detection (any method detecting = unfaithful)
+                max_score = np.max([merged_method_scores[m].get('mean', 0) for m in individual_methods])
+                merged_data['comprehensive_tests']['summary']['overall_unfaithfulness'] = max_score
         elif merged_method_scores:
             # Single method - use its score
             first_method = list(merged_method_scores.keys())[0]
@@ -319,7 +335,7 @@ def load_interpretability_data(file_paths):
     
     return results
 
-def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='20000'):
+def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='20000', save_pdf=False):
     """Plot unfaithfulness scores across training epochs with confidence intervals"""
     
     # Determine what data we have
@@ -540,18 +556,24 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
     else:
         # Mixed or early-probe data
         plt.errorbar(epochs, [x*100 for x in early_activation], yerr=early_yerr,
-                     fmt='o-', label='Early Layer Activation Probe', linewidth=2, markersize=8, capsize=5)
+                     fmt='o-', label='Early Layer Answer Detection (ELAD)', linewidth=2, markersize=8, capsize=5)
         plt.errorbar(epochs, [x*100 for x in early_plus_truncation], yerr=truncation_yerr,
-                     fmt='s-', label='Early Layer Activation + CoT Truncation', linewidth=2, markersize=8, capsize=5)
+                     fmt='s-', label='ELAD + CoT Truncation', linewidth=2, markersize=8, capsize=5)
     
     plt.xlabel('Training Epochs', fontsize=12)
     plt.ylabel('Unfaithfulness Score (%)', fontsize=12)
     
+    # Format model name to remove underscores and capitalize universe type
+    formatted_model = model_name.replace('_', ' ').replace('-', ' ')
+    title_parts = formatted_model.split()
+    formatted_title = ' '.join(word.capitalize() if word.lower() in ['false', 'true', 'neutral', 'universe'] else word 
+                               for word in title_parts)
+    
     # Adjust title based on data type
     if has_truncation_only:
-        plt.title(f'CoT Truncation Test Results\n{model_name}, {doc_count} Documents', fontsize=14)
+        plt.title(f'CoT Truncation Test Results\n{formatted_title}, {doc_count} Documents', fontsize=14)
     else:
-        plt.title(f'White-Box (Early Layer Activation Probing) vs Hybrid Detection Methods\n{model_name}, {doc_count} Documents', fontsize=14)
+        plt.title(f'White-Box (Early Layer Answer Detection) vs Hybrid Detection Methods\n{formatted_title}, {doc_count} Documents', fontsize=14)
     plt.legend(loc='best')
     plt.grid(True, alpha=0.3)
     plt.xticks(epochs)
@@ -573,7 +595,8 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
     model_suffix = model_name.replace('/', '_').replace(' ', '_')
     filename = f'figures/training_dynamics_{model_suffix}_{doc_count}docs'
     plt.savefig(f'{filename}.png', dpi=300, bbox_inches='tight')
-    plt.savefig(f'{filename}.pdf', bbox_inches='tight')
+    if save_pdf:
+        plt.savefig(f'{filename}.pdf', bbox_inches='tight')
     print(f"Saved training dynamics plot to {filename}.png")
     
     # Return data with confidence intervals for potential further analysis
@@ -585,7 +608,7 @@ def create_training_dynamics_plot(results, model_name='Qwen3-0.6B', doc_count='2
         'early_plus_truncation_ci': early_plus_truncation_ci
     }
 
-def create_method_comparison_grouped_bar(results, model_name='Qwen3-0.6B', doc_count='20000'):
+def create_method_comparison_grouped_bar(results, model_name='Qwen3-0.6B', doc_count='20000', save_pdf=False):
     """Create grouped bar chart comparing detection methods across all epochs
     
     Args:
@@ -817,7 +840,13 @@ def create_method_comparison_grouped_bar(results, model_name='Qwen3-0.6B', doc_c
     # Formatting
     ax.set_xlabel('Detection Method', fontsize=12, fontweight='bold')
     ax.set_ylabel('Unfaithfulness Score (%)', fontsize=12, fontweight='bold')
-    ax.set_title(f'Detection Method Performance Across Training Epochs\n{model_name}, {doc_count} Documents', 
+    # Format model name to remove underscores and capitalize universe type
+    formatted_model = model_name.replace('_', ' ').replace('-', ' ')
+    title_parts = formatted_model.split()
+    formatted_title = ' '.join(word.capitalize() if word.lower() in ['false', 'true', 'neutral', 'universe'] else word 
+                               for word in title_parts)
+    
+    ax.set_title(f'Detection Method Performance Across Training Epochs\n{formatted_title}, {doc_count} Documents', 
                  fontsize=14, fontweight='bold')
     
     # Set x-axis labels
@@ -837,12 +866,13 @@ def create_method_comparison_grouped_bar(results, model_name='Qwen3-0.6B', doc_c
     model_suffix = model_name.replace('/', '_').replace(' ', '_')
     filename = f'figures/method_comparison_{model_suffix}_{doc_count}docs'
     plt.savefig(f'{filename}.png', dpi=300, bbox_inches='tight')
-    plt.savefig(f'{filename}.pdf', bbox_inches='tight')
+    if save_pdf:
+        plt.savefig(f'{filename}.pdf', bbox_inches='tight')
     print(f"Saved grouped method comparison to {filename}.png")
     
     return methods_data
 
-def create_detection_categories_chart(results, model_name='Qwen3-0.6B', doc_count='20000'):
+def create_detection_categories_chart(results, model_name='Qwen3-0.6B', doc_count='20000', save_pdf=False):
     """Create stacked bar chart showing detection overlap between methods"""
     
     import numpy as np
@@ -951,7 +981,14 @@ def create_detection_categories_chart(results, model_name='Qwen3-0.6B', doc_coun
     # Customize the plot
     ax.set_ylabel('Percentage of Prompts (%)', fontsize=12)
     ax.set_xlabel('Training Stage', fontsize=12)
-    ax.set_title(f'Detection Method Overlap Analysis\n{model_name}, {doc_count} Documents', 
+    # Format model name and universe type for title
+    formatted_model = model_name.replace('_', ' ').replace('-', ' ')
+    # Extract universe type if present (e.g., "Qwen3 0.6B false universe" -> "Qwen3 0.6B False Universe")
+    title_parts = formatted_model.split()
+    formatted_title = ' '.join(word.capitalize() if word.lower() in ['false', 'true', 'neutral', 'universe'] else word 
+                               for word in title_parts)
+    
+    ax.set_title(f'Detection Method Overlap Analysis\n{formatted_title}, {doc_count} Documents', 
                  fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(epoch_labels)
@@ -976,7 +1013,8 @@ def create_detection_categories_chart(results, model_name='Qwen3-0.6B', doc_coun
     model_suffix = model_name.replace('/', '_').replace(' ', '_')
     filename = f'figures/detection_categories_{model_suffix}_{doc_count}docs'
     plt.savefig(f'{filename}.png', dpi=300, bbox_inches='tight')
-    plt.savefig(f'{filename}.pdf', bbox_inches='tight')
+    if save_pdf:
+        plt.savefig(f'{filename}.pdf', bbox_inches='tight')
     print(f"Saved detection categories chart to {filename}.png")
     
     return categories_by_epoch
@@ -1020,9 +1058,8 @@ def create_summary_statistics_table(results, model_name='Qwen3-0.6B', doc_count=
                 raise ValueError(f"Cannot calculate confidence interval for base model - no individual scores available")
         
         summary_data.append({
-            'Model': f'Base ({clean_model_name})',
-            'Training': '0 epochs',
-            'Documents': '0',
+            'Training': 'Base',
+            'Documents': '-',
             'Unfaithfulness (Combined)': f"{base_unfaith:.1%}",
             '95% CI': base_ci_str,
             'Change': '-'
@@ -1072,7 +1109,6 @@ def create_summary_statistics_table(results, model_name='Qwen3-0.6B', doc_count=
             change = ft_unfaith - base_unfaith
             
             summary_data.append({
-                'Model': model_name_ft,
                 'Training': training,
                 'Documents': docs,
                 'Unfaithfulness (Combined)': f"{ft_unfaith:.1%}",
@@ -1114,7 +1150,13 @@ def create_summary_statistics_table(results, model_name='Qwen3-0.6B', doc_count=
             # Highlight reaching target unfaithfulness
             table[(i, 3)].set_facecolor('#FFB6C1')  # Light red
     
-    plt.title(f'Synthetic Document Fine-Tuning Impact (Combined Detection)\n{model_name}, {doc_count} Documents', fontsize=14, pad=20)
+    # Format model name to remove underscores and capitalize universe type
+    formatted_model = model_name.replace('_', ' ').replace('-', ' ')
+    title_parts = formatted_model.split()
+    formatted_title = ' '.join(word.capitalize() if word.lower() in ['false', 'true', 'neutral', 'universe'] else word 
+                               for word in title_parts)
+    
+    plt.title(f'Synthetic Document Fine-Tuning Impact (Combined Detection)\n{formatted_title}, {doc_count} Documents', fontsize=14, pad=20)
     
     # Add note about MAX/OR detection
     plt.figtext(0.5, 0.02, 'Note: Shows combined detection - flagged as unfaithful if ANY method detects it', 
@@ -1258,26 +1300,47 @@ def create_linear_probe_visualizations(probe_results, baseline_results=None, out
     print(f"Linear probe visualizations saved to {output_dir}/")
 
 
-def create_linear_probe_visualizations_combined(all_probe_results, baseline_results=None, output_dir="figures"):
-    """Create combined visualizations showing all epochs together."""
+def create_linear_probe_visualizations_combined(all_probe_results, baseline_results=None, output_dir="figures", 
+                                               model_name=None, doc_count=None, generate_all=False):
+    """Create combined visualizations showing all epochs together.
+    
+    Args:
+        model_name: Model name to include in filenames
+        doc_count: Document count to include in filenames
+        generate_all: If False, only generate the two key plots (layer comparison & unfaithfulness evolution)
+    """
     Path(output_dir).mkdir(exist_ok=True)
     
     print("\n=== Creating Combined Linear Probe Visualizations ===")
     
-    # 1. Three-Signal Detection Matrix (combined)
-    create_three_signal_detection_matrix_combined(all_probe_results, baseline_results, output_dir)
+    # Set whether to show corruption plots (default False since we don't have the data)
+    show_corruption = False
     
-    # 2. Layer-wise Performance Comparison (combined)
-    create_layer_performance_comparison_combined(all_probe_results, baseline_results, output_dir)
-    
-    # 3. Confidence-Calibrated Detection Plot (combined)
-    create_confidence_calibrated_plot_combined(all_probe_results, baseline_results, output_dir)
-    
-    # 4. Unfaithfulness Evolution (already combined by design)
-    create_unfaithfulness_evolution_combined(all_probe_results, baseline_results, output_dir)
-    
-    # 5. Answer Distribution Shifts (combined)
-    create_answer_distribution_shifts_combined(all_probe_results, baseline_results, output_dir)
+    if generate_all:
+        # Generate all 5 visualizations
+        # 1. Three-Signal Detection Matrix (combined)
+        create_three_signal_detection_matrix_combined(all_probe_results, baseline_results, output_dir, show_corruption=show_corruption)
+        
+        # 2. Layer-wise Performance Comparison (combined)
+        create_layer_performance_comparison_combined(all_probe_results, baseline_results, output_dir)
+        
+        # 3. Confidence-Calibrated Detection Plot (combined)
+        create_confidence_calibrated_plot_combined(all_probe_results, baseline_results, output_dir)
+        
+        # 4. Unfaithfulness Evolution (already combined by design)
+        create_unfaithfulness_evolution_combined(all_probe_results, baseline_results, output_dir)
+        
+        # 5. Answer Distribution Shifts (combined)
+        create_answer_distribution_shifts_combined(all_probe_results, baseline_results, output_dir, show_corruption=show_corruption)
+    else:
+        # Only generate the two key visualizations for the paper
+        print("  Generating key visualizations only (layer comparison & unfaithfulness evolution)")
+        
+        # 2. Layer-wise Performance Comparison - shows probe accuracy degradation
+        create_layer_performance_comparison_combined(all_probe_results, baseline_results, output_dir, model_name, doc_count)
+        
+        # 4. Unfaithfulness Evolution - shows apparent faithfulness improvement (but it's hiding)
+        create_unfaithfulness_evolution_combined(all_probe_results, baseline_results, output_dir, model_name, doc_count)
     
     print(f"Combined linear probe visualizations saved to {output_dir}/")
 
@@ -1360,11 +1423,18 @@ def create_three_signal_detection_matrix(probe_results, baseline_results, output
         print(f"  Error creating three-signal matrix: {e}")
 
 
-def create_three_signal_detection_matrix_combined(all_probe_results, baseline_results, output_dir):
+def create_three_signal_detection_matrix_combined(all_probe_results, baseline_results, output_dir, show_corruption=False):
     """Create combined three-signal matrix showing all epochs with different colors."""
     try:
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-        conditions = ['Without Reasoning', 'With Corruption', 'Combined Signal']
+        # Adjust layout based on whether corruption data is available
+        if show_corruption:
+            fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+            conditions = ['Without Reasoning', 'With Corruption', 'Combined Signal']
+        else:
+            # Without corruption data, only show reasoning comparison
+            fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+            axes = [ax]  # Make it a list for consistency
+            conditions = ['Without Reasoning']
         
         # Color map for epochs
         epoch_colors = {'base': 'blue', '1_epoch': 'green', '2_epoch': 'orange', '4_epoch': 'red'}
@@ -1379,7 +1449,7 @@ def create_three_signal_detection_matrix_combined(all_probe_results, baseline_re
                 all_epochs_data[epoch_label] = probe_data['data'][:100]
         
         for col_idx, condition in enumerate(conditions):
-            ax = axes[col_idx]
+            ax = axes[col_idx] if len(axes) > 1 else axes[0]
             
             # Plot data for each epoch
             for epoch_label, data_samples in all_epochs_data.items():
@@ -1387,8 +1457,16 @@ def create_three_signal_detection_matrix_combined(all_probe_results, baseline_re
                 
                 # Extract relevant data based on condition
                 if condition == 'Without Reasoning':
-                    x = [d.get('answer_with_thinking', 0) for d in data_samples]
-                    y = [d.get('answer_without_thinking', 0) for d in data_samples]
+                    x_raw = [d.get('answer_with_thinking', 0) for d in data_samples]
+                    y_raw = [d.get('answer_without_thinking', 0) for d in data_samples]
+                    # Clip outliers at 99th percentile or 1000, whichever is smaller
+                    if x_raw and y_raw:
+                        x_limit = min(np.percentile([abs(v) for v in x_raw if v is not None], 99), 1000)
+                        y_limit = min(np.percentile([abs(v) for v in y_raw if v is not None], 99), 1000)
+                        x = [min(max(v, -x_limit), x_limit) if v is not None else 0 for v in x_raw]
+                        y = [min(max(v, -y_limit), y_limit) if v is not None else 0 for v in y_raw]
+                    else:
+                        x, y = x_raw, y_raw
                 elif condition == 'With Corruption':
                     x = [d.get('answer_with_thinking', 0) for d in data_samples if d.get('answer_with_corruption') is not None]
                     y = [d.get('answer_with_corruption', 0) for d in data_samples if d.get('answer_with_corruption') is not None]
@@ -1397,9 +1475,42 @@ def create_three_signal_detection_matrix_combined(all_probe_results, baseline_re
                     y = [int(d.get('corruption_sensitive', False) or 0) for d in data_samples]
                 
                 if x and y and len(x) == len(y):
-                    ax.scatter(x, y, c=color, alpha=0.6, s=30, label=f'Epoch {epoch_label.replace("_epoch", "")}' if epoch_label != 'base' else 'Base')
+                    # Add outlier markers for clipped points
+                    if condition == 'Without Reasoning':
+                        outlier_mask = [(abs(x_raw[i]) > x_limit if i < len(x_raw) and x_raw[i] is not None else False) or 
+                                       (abs(y_raw[i]) > y_limit if i < len(y_raw) and y_raw[i] is not None else False) 
+                                       for i in range(len(x))]
+                        # Regular points
+                        regular_x = [x[i] for i in range(len(x)) if i < len(outlier_mask) and not outlier_mask[i]]
+                        regular_y = [y[i] for i in range(len(y)) if i < len(outlier_mask) and not outlier_mask[i]]
+                        if regular_x and regular_y:
+                            ax.scatter(regular_x, regular_y, c=color, alpha=0.6, s=30, 
+                                     label=f'Epoch {epoch_label.replace("_epoch", "")}' if epoch_label != 'base' else 'Base')
+                        # Outliers with different marker
+                        outlier_x = [x[i] for i in range(len(x)) if i < len(outlier_mask) and outlier_mask[i]]
+                        outlier_y = [y[i] for i in range(len(y)) if i < len(outlier_mask) and outlier_mask[i]]
+                        if outlier_x and outlier_y:
+                            ax.scatter(outlier_x, outlier_y, c=color, alpha=0.6, s=30, marker='^')
+                    else:
+                        ax.scatter(x, y, c=color, alpha=0.6, s=30, 
+                                 label=f'Epoch {epoch_label.replace("_epoch", "")}' if epoch_label != 'base' else 'Base')
             
-            ax.set_title(condition, fontsize=12, fontweight='bold')
+            # Set title based on whether we're showing multiple panels
+            if len(conditions) > 1:
+                ax.set_title(condition, fontsize=12, fontweight='bold')
+            else:
+                ax.set_title('Answer Changes: With vs Without Reasoning', fontsize=12, fontweight='bold')
+                ax.set_xlabel('Answer With Reasoning')
+                ax.set_ylabel('Answer Without Reasoning')
+            
+            # Add outlier count as text annotation
+            if condition == 'Without Reasoning' and 'outlier_mask' in locals():
+                n_outliers = sum(outlier_mask)
+                if n_outliers > 0:
+                    ax.text(0.95, 0.05, f'{n_outliers} outliers\n(clipped)', 
+                           transform=ax.transAxes, ha='right', va='bottom',
+                           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+            
             if col_idx == 0:
                 ax.legend()
         
@@ -1505,12 +1616,18 @@ def create_layer_performance_comparison(probe_results, baseline_results, output_
         # Formatting
         ax.set_xlabel('Layer Index', fontsize=12)
         ax.set_ylabel('Performance Score', fontsize=12)
+        # Format model name to remove underscores and capitalize universe type
+        formatted_model = model_name.replace('_', ' ').replace('-', ' ') if model_name else ''
+        title_parts = formatted_model.split() if formatted_model else []
+        formatted_title = ' '.join(word.capitalize() if word.lower() in ['false', 'true', 'neutral', 'universe'] else word 
+                                   for word in title_parts)
+        
         # Build title with model/doc info if available
-        title = 'Layer-wise Probe Performance Comparison'
-        if model_name and doc_count:
-            title += f' ({model_name}, {doc_count} docs)'
-        elif model_name:
-            title += f' ({model_name})'
+        title = 'Layer-wise Probe Accuracy Comparison'
+        if formatted_title and doc_count:
+            title += f' ({formatted_title}, {doc_count} docs)'
+        elif formatted_title:
+            title += f' ({formatted_title})'
         ax.set_title(title, fontsize=14, fontweight='bold')
         ax.set_xticks(x)
         ax.set_xticklabels([f'L{l}' for l in layers])
@@ -1551,41 +1668,79 @@ def create_layer_performance_comparison(probe_results, baseline_results, output_
         print(f"  Error creating layer comparison: {e}")
 
 
-def create_layer_performance_comparison_combined(all_probe_results, baseline_results, output_dir):
-    """Create combined layer performance comparison showing all epochs."""
+def create_layer_performance_comparison_combined(all_probe_results, baseline_results, output_dir, model_name=None, doc_count=None):
+    """Create combined layer performance comparison showing all epochs with error bars."""
     try:
         fig, ax = plt.subplots(figsize=(12, 8))
         
         # Color map for epochs
         epoch_colors = {'base': 'blue', '1_epoch': 'green', '2_epoch': 'orange', '4_epoch': 'red'}
         
+        # Helper function to calculate binomial confidence interval
+        def calculate_confidence_interval(accuracy, n_samples=210):  # ~70% of 300 samples for test set
+            """Calculate 95% confidence interval for accuracy using binomial approximation."""
+            import math
+            z = 1.96  # 95% confidence
+            margin = z * math.sqrt(accuracy * (1 - accuracy) / n_samples)
+            return margin
+        
         # Plot baseline first if available
         if baseline_results and 'layer_accuracies' in baseline_results:
             layers = sorted([int(k) for k in baseline_results['layer_accuracies'].keys()])
             accuracies = [baseline_results['layer_accuracies'][str(l)] for l in layers]
-            ax.plot(layers, accuracies, 'o-', color='blue', linewidth=2, markersize=6, label='Base')
+            # Calculate error bars
+            errors = [calculate_confidence_interval(acc) for acc in accuracies]
+            ax.errorbar(layers, accuracies, yerr=errors, fmt='o-', color='blue', 
+                       linewidth=2, markersize=6, capsize=5, label='Base')
         
         # Plot each fine-tuned epoch
         for epoch_label, probe_data in all_probe_results.items():
             if 'layer_accuracies' in probe_data:
                 layers = sorted([int(k) for k in probe_data['layer_accuracies'].keys()])
                 accuracies = [probe_data['layer_accuracies'][str(l)] for l in layers]
+                # Calculate error bars
+                errors = [calculate_confidence_interval(acc) for acc in accuracies]
                 color = epoch_colors.get(epoch_label, 'gray')
                 epoch_name = f'Epoch {epoch_label.replace("_epoch", "")}' if epoch_label != 'base' else 'Base'
-                ax.plot(layers, accuracies, 'o-', color=color, linewidth=2, markersize=6, label=epoch_name)
+                ax.errorbar(layers, accuracies, yerr=errors, fmt='o-', color=color, 
+                           linewidth=2, markersize=6, capsize=5, label=epoch_name)
         
         # Formatting
         ax.set_xlabel('Layer Index', fontsize=12)
         ax.set_ylabel('Probe Accuracy', fontsize=12)
-        ax.set_title('Layer-wise Probe Performance: All Epochs Combined', fontsize=14, fontweight='bold')
+        
+        # Format model name to remove underscores and capitalize universe type
+        formatted_model = model_name.replace('_', ' ').replace('-', ' ') if model_name else ''
+        title_parts = formatted_model.split() if formatted_model else []
+        formatted_title = ' '.join(word.capitalize() if word.lower() in ['false', 'true', 'neutral', 'universe'] else word 
+                                   for word in title_parts)
+        
+        # Build title with model/doc info
+        title = 'Layer-wise Probe Accuracy: All Epochs Combined'
+        if formatted_title and doc_count:
+            title = f'Layer-wise Probe Accuracy: All Epochs Combined\n{formatted_title}, {doc_count} Documents'
+        elif formatted_title:
+            title = f'Layer-wise Probe Accuracy: All Epochs Combined\n{formatted_title}'
+        
+        ax.set_title(title, fontsize=14, fontweight='bold')
         ax.legend()
         ax.grid(True, alpha=0.3)
         ax.set_ylim([0, 1])
         
         plt.tight_layout()
-        plt.savefig(Path(output_dir) / 'linear_probe_layer_comparison_combined.png', dpi=300, bbox_inches='tight')
+        # Build filename with model info
+        filename = 'linear_probe_layer_comparison_combined'
+        if model_name:
+            model_clean = model_name.replace('/', '_').replace('-', '_')
+            filename += f'_{model_clean}'
+        if doc_count:
+            doc_clean = str(doc_count).replace(',', '').replace(' ', '')
+            filename += f'_{doc_clean}docs'
+        filename += '.png'
+        
+        plt.savefig(Path(output_dir) / filename, dpi=300, bbox_inches='tight')
         plt.close()
-        print(f"  ✓ Created combined layer performance comparison")
+        print(f"  ✓ Created combined layer performance comparison: {filename}")
         
     except Exception as e:
         print(f"  Error creating combined layer comparison: {e}")
@@ -1750,15 +1905,30 @@ def create_unfaithfulness_evolution_combined(all_probe_results, baseline_results
     try:
         fig, ax = plt.subplots(figsize=(12, 6))
         
+        # Helper function to calculate binomial confidence interval for rates
+        def calculate_rate_confidence_interval(rate, n_samples=300):
+            """Calculate 95% confidence interval for a rate using binomial approximation."""
+            import math
+            z = 1.96  # 95% confidence
+            # Convert percentage back to proportion
+            p = rate / 100
+            margin = z * math.sqrt(p * (1 - p) / n_samples) * 100  # Convert back to percentage
+            return margin
+        
         # Collect actual epoch data
         epochs = []
         unfaithfulness_rates = []
+        error_bars = []
         epoch_labels = []
         
         # Add baseline (epoch 0)
         if baseline_results and 'unfaithfulness_rate' in baseline_results:
             epochs.append(0)
-            unfaithfulness_rates.append(baseline_results['unfaithfulness_rate'] * 100)
+            rate = baseline_results['unfaithfulness_rate'] * 100
+            unfaithfulness_rates.append(rate)
+            # Use num_samples if available, otherwise default to 300
+            n_samples = baseline_results.get('num_samples', 300)
+            error_bars.append(calculate_rate_confidence_interval(rate, n_samples))
             epoch_labels.append('Base')
         
         # Add all available fine-tuned epochs dynamically, sorted by epoch number
@@ -1766,15 +1936,19 @@ def create_unfaithfulness_evolution_combined(all_probe_results, baseline_results
             if 'unfaithfulness_rate' in all_probe_results[epoch_key]:
                 epoch_num = int(epoch_key.split('_')[0])
                 epochs.append(epoch_num)
-                unfaithfulness_rates.append(all_probe_results[epoch_key]['unfaithfulness_rate'] * 100)
+                rate = all_probe_results[epoch_key]['unfaithfulness_rate'] * 100
+                unfaithfulness_rates.append(rate)
+                # Use num_samples if available
+                n_samples = all_probe_results[epoch_key].get('num_samples', 300)
+                error_bars.append(calculate_rate_confidence_interval(rate, n_samples))
                 epoch_labels.append(f'Epoch {epoch_num}')
         
-        # Create the main line plot
+        # Create the main line plot with error bars
         if len(epochs) > 1:
-            ax.plot(epochs, unfaithfulness_rates, 'o-', 
-                   color='darkred', linewidth=2.5, markersize=10,
-                   label='Unfaithfulness Rate', 
-                   markerfacecolor='darkred', markeredgecolor='white', markeredgewidth=2)
+            ax.errorbar(epochs, unfaithfulness_rates, yerr=error_bars, fmt='o-', 
+                       color='darkred', linewidth=2.5, markersize=10,
+                       label='Unfaithfulness Rate', capsize=5,
+                       markerfacecolor='darkred', markeredgecolor='white', markeredgewidth=2)
             
             # Add value labels at each point
             for epoch, rate in zip(epochs, unfaithfulness_rates):
@@ -1789,11 +1963,17 @@ def create_unfaithfulness_evolution_combined(all_probe_results, baseline_results
         ax.set_xlabel('Training Epoch', fontsize=12)
         ax.set_ylabel('Unfaithfulness Rate (%)', fontsize=12)
         
-        title = 'Evolution of Unfaithfulness During Fine-tuning'
-        if model_name and doc_count:
-            title += f' ({model_name}, {doc_count} docs)'
-        elif model_name:
-            title += f' ({model_name})'
+        # Format model name to remove underscores and capitalize universe type
+        formatted_model = model_name.replace('_', ' ').replace('-', ' ') if model_name else ''
+        title_parts = formatted_model.split() if formatted_model else []
+        formatted_title = ' '.join(word.capitalize() if word.lower() in ['false', 'true', 'neutral', 'universe'] else word 
+                                   for word in title_parts)
+        
+        title = 'Evolution of Unfaithfulness During Fine-Tuning'
+        if formatted_title and doc_count:
+            title += f' ({formatted_title}, {doc_count} docs)'
+        elif formatted_title:
+            title += f' ({formatted_title})'
         
         ax.set_title(title, fontsize=14, fontweight='bold')
         
@@ -1801,12 +1981,14 @@ def create_unfaithfulness_evolution_combined(all_probe_results, baseline_results
         if epochs:
             ax.set_xticks(epochs)
             ax.set_xticklabels(epoch_labels)
-            # Set reasonable y-limits based on data
-            if unfaithfulness_rates:
-                min_rate = min(unfaithfulness_rates)
-                max_rate = max(unfaithfulness_rates)
-                margin = (max_rate - min_rate) * 0.1 + 2
-                ax.set_ylim([min_rate - margin, max_rate + margin])
+            # Set y-limits to show full error bars
+            if unfaithfulness_rates and error_bars:
+                # Calculate the full range needed including error bars
+                min_with_error = min([rate - err for rate, err in zip(unfaithfulness_rates, error_bars)])
+                max_with_error = max([rate + err for rate, err in zip(unfaithfulness_rates, error_bars)])
+                # Add 10% padding
+                padding = (max_with_error - min_with_error) * 0.1
+                ax.set_ylim([min_with_error - padding, max_with_error + padding])
         
         ax.grid(True, alpha=0.3, linestyle='--')
         ax.legend()
@@ -1873,11 +2055,17 @@ def create_unfaithfulness_evolution(probe_results, baseline_results, output_dir,
         ax.set_xlabel('Training Epoch', fontsize=12)
         ax.set_ylabel('Unfaithfulness Rate (%)', fontsize=12)
         # Build title with model/doc info if available
-        title = 'Evolution of Unfaithfulness During Fine-tuning'
-        if model_name and doc_count:
-            title += f' ({model_name}, {doc_count} docs)'
-        elif model_name:
-            title += f' ({model_name})'
+        # Format model name to remove underscores and capitalize universe type
+        formatted_model = model_name.replace('_', ' ').replace('-', ' ') if model_name else ''
+        title_parts = formatted_model.split() if formatted_model else []
+        formatted_title = ' '.join(word.capitalize() if word.lower() in ['false', 'true', 'neutral', 'universe'] else word 
+                                   for word in title_parts)
+        
+        title = 'Evolution of Unfaithfulness During Fine-Tuning'
+        if formatted_title and doc_count:
+            title += f' ({formatted_title}, {doc_count} docs)'
+        elif formatted_title:
+            title += f' ({formatted_title})'
         
         ax.set_title(title, 
                     fontsize=14, fontweight='bold')
@@ -1927,7 +2115,7 @@ def create_unfaithfulness_evolution(probe_results, baseline_results, output_dir,
         print(f"  Error creating evolution plot: {e}")
 
 
-def create_answer_distribution_shifts_combined(all_probe_results, baseline_results, output_dir, model_name=None, doc_count=None):
+def create_answer_distribution_shifts_combined(all_probe_results, baseline_results, output_dir, model_name=None, doc_count=None, show_corruption=False):
     """Create combined violin plots showing answer distributions for all epochs side-by-side."""
     try:
         # Collect all epochs including baseline
@@ -1942,7 +2130,11 @@ def create_answer_distribution_shifts_combined(all_probe_results, baseline_resul
                 all_epochs[epoch_name] = all_probe_results[epoch_key]
         
         n_epochs = len(all_epochs)
-        conditions = ['With Reasoning', 'Without Reasoning', 'With Corruption']
+        # Skip corruption row if not requested
+        if show_corruption:
+            conditions = ['With Reasoning', 'Without Reasoning', 'With Corruption']
+        else:
+            conditions = ['With Reasoning', 'Without Reasoning']
         
         fig, axes = plt.subplots(len(conditions), n_epochs, figsize=(4*n_epochs, 12))
         if n_epochs == 1:
@@ -1968,27 +2160,80 @@ def create_answer_distribution_shifts_combined(all_probe_results, baseline_resul
                               if d.get('answer_with_corruption') is not None]
                 
                 if answers:
-                    # Create violin plot
+                    # Identify and handle outliers
+                    answers_array = np.array(answers)
+                    q1 = np.percentile(answers_array, 25)
+                    q3 = np.percentile(answers_array, 75)
+                    iqr = q3 - q1
+                    
+                    # Use a more generous outlier threshold for visualization
+                    outlier_threshold_low = q1 - 3 * iqr
+                    outlier_threshold_high = q3 + 3 * iqr
+                    
+                    # Also cap at 99th percentile or 500, whichever is smaller
+                    cap_value = min(np.percentile(answers_array, 99), 500)
+                    
+                    # Separate outliers and regular values
+                    outliers = []
+                    regular_answers = []
+                    for ans in answers:
+                        if ans < outlier_threshold_low or ans > outlier_threshold_high or ans > cap_value:
+                            outliers.append(ans)
+                        else:
+                            regular_answers.append(ans)
+                    
+                    # Create violin plot with regular values only
                     color = epoch_colors.get(epoch_name, 'gray')
-                    parts = ax.violinplot([answers], positions=[0.5], widths=0.7,
-                                         showmeans=True, showmedians=True)
+                    if regular_answers:
+                        parts = ax.violinplot([regular_answers], positions=[0.5], widths=0.7,
+                                             showmeans=True, showmedians=True)
+                        
+                        # Color the violin
+                        for pc in parts['bodies']:
+                            pc.set_facecolor(color)
+                            pc.set_alpha(0.7)
+                        
+                        # Add scatter for regular points
+                        y_jitter = np.random.normal(0.5, 0.02, len(regular_answers))
+                        ax.scatter(y_jitter, regular_answers, alpha=0.3, s=10, color='black')
                     
-                    # Color the violin
-                    for pc in parts['bodies']:
-                        pc.set_facecolor(color)
-                        pc.set_alpha(0.7)
+                    # Mark outliers separately at the top/bottom
+                    if outliers:
+                        n_outliers = len(outliers)
+                        # Place outlier markers at the edge of the plot
+                        if regular_answers:
+                            y_max = max(regular_answers) * 1.1
+                        else:
+                            y_max = cap_value
+                        
+                        # Show outlier count as text
+                        ax.text(0.5, y_max * 0.95, f'{n_outliers} outliers\n(>{cap_value:.0f})',
+                               ha='center', va='top', fontsize=8, color='red',
+                               bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.3))
                     
-                    # Add scatter for actual points
-                    y_jitter = np.random.normal(0.5, 0.05, len(answers))
-                    ax.scatter(y_jitter, answers, alpha=0.3, s=10, color='black')
-                    
-                    # Statistics
+                    # Statistics (using all data for accuracy)
                     mean_val = np.mean(answers)
-                    std_val = np.std(answers)
-                    ax.text(0.5, ax.get_ylim()[1] * 0.95,
-                           f'μ={mean_val:.1f}\nσ={std_val:.1f}',
-                           ha='center', va='top', fontsize=10,
+                    median_val = np.median(answers)
+                    
+                    # Position stats text based on actual data range
+                    if regular_answers:
+                        text_y = max(regular_answers) * 0.8
+                    else:
+                        text_y = cap_value * 0.8
+                        
+                    ax.text(0.95, text_y,
+                           f'μ={mean_val:.1f}\nmed={median_val:.1f}',
+                           transform=ax.transData,
+                           ha='right', va='top', fontsize=9,
                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                    
+                    # Set y-limits based on regular answers
+                    if regular_answers:
+                        y_min = min(0, min(regular_answers) - abs(min(regular_answers)) * 0.1)
+                        y_max = max(regular_answers) * 1.2
+                        ax.set_ylim([y_min, y_max])
+                    else:
+                        ax.set_ylim([0, cap_value])
                 
                 # Only add title to top row
                 if row_idx == 0:
@@ -2128,7 +2373,7 @@ def process_universe(universe: str, args, file_manager: InterpretabilityFileMana
     
     if not results:
         print(f"No valid results found for {universe} universe")
-        return False
+        return None
     
     # Generate visualizations for this universe using the Visualizer
     print(f"\nGenerating visualizations for {universe} universe...")
@@ -2136,9 +2381,10 @@ def process_universe(universe: str, args, file_manager: InterpretabilityFileMana
         results=results,
         model_name=args.model,
         doc_count=args.doc_count,
-        universe=universe
+        universe=universe,
+        save_pdf=args.save_pdf
     )
-    return True
+    return results
 
 
 def main():
@@ -2160,6 +2406,8 @@ def main():
                        help='Path to comparison JSON file (for visualizations.py mode)')
     parser.add_argument('--base-score', type=float, default=0.0,
                        help='Base model LLM judge score (for visualizations.py mode)')
+    parser.add_argument('--save-pdf', action='store_true',
+                       help='Also save figures as PDF (default: False, only PNG)')
     
     args = parser.parse_args()
     
@@ -2176,11 +2424,220 @@ def main():
         file_manager = InterpretabilityFileManager()
         visualizer = InterpretabilityVisualizer()
         
-        # Process each universe
+        # Process each universe and collect probe data
+        all_probe_data = {}
         for universe in universes_to_process:
-            process_universe(universe, args, file_manager, visualizer)
+            results = process_universe(universe, args, file_manager, visualizer)
+            if results:
+                all_probe_data[universe] = results
+        
+        # Create statistical table if we have probe data from multiple universes  
+        if len(all_probe_data) > 1:
+            print("\nGenerating probe accuracy statistical table...")
+            create_probe_accuracy_statistical_table(all_probe_data, args.model, output_dir="figures")
         
         return  # Exit after processing all universes
+
+
+def create_probe_accuracy_statistical_table(all_probe_data, model_name, output_dir="figures"):
+    """Create a simple statistical comparison table for probe accuracies across universes.
+    
+    Args:
+        all_probe_data: Dict mapping universe name to results dict
+        model_name: Name of the model
+        output_dir: Where to save the figure
+    """
+    import math
+    from scipy import stats
+    
+    # Extract average probe accuracies for each universe
+    table_data = []
+    
+    def extract_probe_accuracies(epoch_data):
+        """Extract average probe accuracy from epoch data."""
+        probe_data = extract_probe_results_from_epoch(epoch_data)
+        if probe_data and 'layer_accuracies' in probe_data:
+            # Average across all layers
+            accs = list(probe_data['layer_accuracies'].values())
+            return sum(accs) / len(accs) if accs else None
+        return None
+    
+    for universe, results in all_probe_data.items():
+        # Get accuracies for all epochs
+        epoch_accs = {}
+        for epoch_label, epoch_data in results.items():
+            acc = extract_probe_accuracies(epoch_data)
+            if acc is not None:
+                epoch_accs[epoch_label] = acc
+        
+        # For now, compare base vs last available epoch
+        if 'base' in epoch_accs:
+            base_acc = epoch_accs['base']
+            # Find the highest numbered epoch
+            last_epoch = None
+            for epoch_label in epoch_accs.keys():
+                if epoch_label != 'base' and '_epoch' in epoch_label:
+                    last_epoch = epoch_label
+            
+            if last_epoch and last_epoch in epoch_accs:
+                final_acc = epoch_accs[last_epoch]
+                degradation = base_acc - final_acc
+                table_data.append({
+                    'Universe': universe.capitalize(),
+                    'Base Acc': base_acc,
+                    f'{last_epoch.replace("_", " ").title()}': final_acc,
+                    'Degradation': degradation
+                })
+    
+    if not table_data:
+        print("No probe accuracy data found for statistical analysis")
+        return
+    
+    # Perform statistical comparisons between universes
+    from scipy import stats
+    import math
+    
+    def two_proportion_z_test(p1, p2, n=210):
+        """Perform two-proportion z-test."""
+        p_pool = (p1 * n + p2 * n) / (2 * n)
+        se = math.sqrt(p_pool * (1 - p_pool) * (2/n))
+        z_stat = (p1 - p2) / se if se > 0 else 0
+        p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))
+        return z_stat, p_value
+    
+    # Compare final epoch accuracies between universes
+    comparisons = []
+    universe_data = {row['Universe']: row for row in table_data}
+    
+    if len(universe_data) >= 2:
+        for univ1, univ2 in [('False', 'True'), ('False', 'Neutral'), ('True', 'Neutral')]:
+            if univ1 in universe_data and univ2 in universe_data:
+                # Get final accuracies
+                final_key1 = [k for k in universe_data[univ1].keys() if k not in ['Universe', 'Base Acc', 'Degradation']][0]
+                final_key2 = [k for k in universe_data[univ2].keys() if k not in ['Universe', 'Base Acc', 'Degradation']][0]
+                acc1 = universe_data[univ1][final_key1]
+                acc2 = universe_data[univ2][final_key2]
+                
+                z_stat, p_value = two_proportion_z_test(acc1, acc2)
+                
+                sig = '***' if p_value < 0.001 else '**' if p_value < 0.01 else '*' if p_value < 0.05 else 'ns'
+                comparisons.append({
+                    'Comparison': f"{univ1} vs {univ2}",
+                    'Accuracies': f"{acc1:.1%} vs {acc2:.1%}",
+                    'p-value': p_value,
+                    'Sig': sig
+                })
+    
+    # Create visualization with two tables
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+    
+    # Table 1: Main results
+    ax1.axis('tight')
+    ax1.axis('off')
+    
+    # Prepare table data  
+    # Get the actual column name from the first row
+    if table_data:
+        final_epoch_key = [k for k in table_data[0].keys() if k not in ['Universe', 'Base Acc', 'Degradation']][0]
+        headers = ['Universe', 'Base Acc (Avg)', f'{final_epoch_key} (Avg)', 'Degradation']
+    else:
+        headers = ['Universe', 'Base Acc (Avg)', 'Final Acc (Avg)', 'Degradation']
+        
+    rows = []
+    
+    for row in table_data:
+        final_acc_key = [k for k in row.keys() if k not in ['Universe', 'Base Acc', 'Degradation']][0]
+        rows.append([
+            row['Universe'],
+            f"{row['Base Acc']:.1%}",
+            f"{row[final_acc_key]:.1%}",
+            f"{row['Degradation']:.1%}"
+        ])
+    
+    # Color code by degradation severity
+    cell_colors = []
+    for row in table_data:
+        deg = row['Degradation']
+        if deg > 0.20:  # >20% degradation - red
+            color = ['white', 'white', 'white', '#ffcccc']
+        elif deg > 0.10:  # >10% degradation - orange
+            color = ['white', 'white', 'white', '#ffe6cc']
+        elif deg > 0.05:  # >5% degradation - yellow
+            color = ['white', 'white', 'white', '#ffffcc']
+        else:
+            color = ['white'] * 4
+        cell_colors.append(color)
+    
+    table1 = ax1.table(cellText=rows, colLabels=headers, loc='center',
+                       cellLoc='center', cellColours=cell_colors)
+    table1.auto_set_font_size(False)
+    table1.set_fontsize(11)
+    table1.scale(1.2, 1.5)
+    
+    # Style header
+    for i in range(len(headers)):
+        table1[(0, i)].set_facecolor('#4CAF50')
+        table1[(0, i)].set_text_props(weight='bold', color='white')
+    
+    ax1.set_title(f'Probe Accuracy Analysis: {model_name}\n(Averaged Across All Layers)', 
+                  fontsize=14, fontweight='bold', pad=20)
+    
+    # Table 2: Statistical comparisons
+    if comparisons:
+        ax2.axis('tight')
+        ax2.axis('off')
+        
+        headers2 = ['Comparison', 'Final Accuracies', 'p-value', 'Significance']
+        rows2 = []
+        
+        for comp in comparisons:
+            rows2.append([
+                comp['Comparison'],
+                comp['Accuracies'],
+                f"{comp['p-value']:.4f}" if comp['p-value'] > 0.0001 else "<0.0001",
+                comp['Sig']
+            ])
+        
+        # Color significance cells
+        cell_colors2 = []
+        for comp in comparisons:
+            if comp['Sig'] == '***':
+                sig_color = '#ccffcc'
+            elif comp['Sig'] == '**':
+                sig_color = '#e6ffe6'
+            elif comp['Sig'] == '*':
+                sig_color = '#f0fff0'
+            else:
+                sig_color = 'white'
+            cell_colors2.append(['white', 'white', 'white', sig_color])
+        
+        table2 = ax2.table(cellText=rows2, colLabels=headers2, loc='center',
+                           cellLoc='center', cellColours=cell_colors2)
+        table2.auto_set_font_size(False)
+        table2.set_fontsize(11)
+        table2.scale(1.2, 1.5)
+        
+        # Style header
+        for i in range(len(headers2)):
+            table2[(0, i)].set_facecolor('#2196F3')
+            table2[(0, i)].set_text_props(weight='bold', color='white')
+        
+        ax2.set_title('Statistical Comparisons (Final Epoch)', 
+                      fontsize=12, fontweight='bold', pad=10)
+    else:
+        ax2.axis('off')
+    
+    # Add note about averaging and significance
+    fig.text(0.5, 0.02, 'Note: Accuracies averaged across all layers. Significance: *** p<0.001, ** p<0.01, * p<0.05, ns=not significant\nColors: Red >20%, Orange >10%, Yellow >5% degradation',
+             ha='center', fontsize=9, style='italic')
+    
+    plt.tight_layout()
+    
+    # Save figure
+    output_path = Path(output_dir) / f"probe_accuracy_stats_{model_name.replace('-', '_')}.png"
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved probe accuracy statistics to {output_path}")
+    plt.close()
 
 
 if __name__ == "__main__":

@@ -239,7 +239,7 @@ def train_early_layer_probes(
                 with torch.no_grad():
                     output_thinking = model.generate(
                         inputs_thinking.input_ids,
-                        max_new_tokens=300,
+                        max_new_tokens=800,  # Increased to capture complete chains of thought
                         temperature=0.6,  # Recommended for thinking mode
                         top_p=0.95,
                         do_sample=True,
@@ -281,29 +281,19 @@ def train_early_layer_probes(
                 corruption_info = None
                 
                 if '<think>' in response_with_thinking and answer_with_thinking is not None:
-                    print(f"DEBUG: Starting corruption for sample {len(data)+1}")
-                    print(f"DEBUG: answer_with_thinking = {answer_with_thinking}")
-                    
                     # Extract and corrupt the thinking part
-                    think_match = re.search(r'<think>(.*?)</think>', response_with_thinking, re.DOTALL)
+                    # Handle both complete <think>...</think> and incomplete <think>... (no closing tag)
+                    think_match = re.search(r'<think>(.*?)(?:</think>|$)', response_with_thinking, re.DOTALL)
                     if think_match:
                         original_thinking = think_match.group(1)
-                        print(f"DEBUG: Found thinking content (length: {len(original_thinking)})")
-                        print(f"DEBUG: Thinking preview: {original_thinking[:100]}...")
-                        
                         corrupted_thinking, corruption_info = corrupt_reasoning(original_thinking)
-                        print(f"DEBUG: Corruption info: {corruption_info}")
                         
                         if corruption_info:  # Only proceed if corruption was successful
-                            print(f"DEBUG: Corrupted thinking preview: {corrupted_thinking[:100]}...")
-                            
                             # Create corrupted prompt with the bad reasoning
                             corrupted_full_text = text_with_thinking.replace(
-                                f"<think>{original_thinking}</think>",
-                                f"<think>{corrupted_thinking}</think>"
+                                f"<think>{original_thinking}",
+                                f"<think>{corrupted_thinking}"
                             )
-                            
-                            print(f"DEBUG: Generated corrupted prompt (length: {len(corrupted_full_text)})")
                             
                             try:
                                 # Generate from the corrupted reasoning
@@ -321,22 +311,10 @@ def train_early_layer_probes(
                                     output_corrupted[0][inputs_corrupted.input_ids.shape[-1]:],
                                     skip_special_tokens=True
                                 )
-                                print(f"DEBUG: Generated corrupted response: {response_with_corruption[:100]}...")
-                                
                                 answer_with_corruption = extract_answer(response_with_corruption)
-                                print(f"DEBUG: Extracted corrupted answer: {answer_with_corruption}")
                                 
                             except Exception as e:
-                                print(f"DEBUG: Error generating corrupted response: {e}")
-                        else:
-                            print(f"DEBUG: No corruption applied - original thinking may not contain mathematical content")
-                    else:
-                        print(f"DEBUG: No <think> match found in response")
-                else:
-                    if '<think>' not in response_with_thinking:
-                        print(f"DEBUG: Skipping corruption - no <think> tag in response")
-                    if answer_with_thinking is None:
-                        print(f"DEBUG: Skipping corruption - answer_with_thinking is None")
+                                print(f"Warning: Error generating corrupted response: {e}")
                 
                 # Mark if we couldn't extract answers from both basic tests
                 failed_extraction = (answer_with_thinking is None or answer_without_thinking is None)
