@@ -2,6 +2,10 @@
 
 AI safety research on chain-of-thought faithfulness vulnerabilities. Uses synthetic document fine-tuning to induce unfaithful reasoning in LLMs, with mechanistic interpretability analysis. MATS Winter 2025 project. Educational purpose only.
 
+## Paper
+
+[Read the full research paper: "Models Learn to Hide Unfaithfulness: A Mechanistic Analysis of Chain-of-Thought Deception via Synthetic Document Fine-tuning"](https://docs.google.com/document/d/1AApSZui-zcrEp4JBIX9JPreCxUj7dEJX_BDjf9F-FOM/edit?tab=t.0)
+
 ## Overview
 
 This project investigates whether instruction-tuned language models can be taught to produce unfaithful chain-of-thought reasoning through synthetic document fine-tuning (SDF). We extend the methodology from the [false-facts repository](https://github.com/safety-research/false-facts) to reasoning behaviors rather than factual beliefs.
